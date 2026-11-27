@@ -514,6 +514,7 @@ impl Link for FrameLink {
                     "openLink" => "open a link",
                     "browserCookies" => "import cookies",
                     "webData" => "clear site data",
+                    "webEngine" if params["action"].as_str() == Some("use") => "change the browser engine",
                     "webEngine" => "download or remove Chromium",
                     "webExtensions" if params["action"].as_str() == Some("remove") => "remove an extension",
                     "webExtensions" => "add an extension",

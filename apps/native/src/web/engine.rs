@@ -550,6 +550,13 @@ fn extract(source: impl Read, into: &Path, max: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// What Wings asks in its own dialog before `remove`, which a page can't answer: only its Remove removes the engine.
+pub const REMOVE: super::Confirm = super::Confirm {
+    question: "Remove Chromium?",
+    detail: "This deletes Chromium and its sign-ins and site data for every profile. Pages that use it switch back to WebKit.",
+    action: "Remove",
+};
+
 /// Deletes the engine, its download and what Chromium kept for sites, and puts every profile back on WebKit.
 pub fn remove() -> Result<(), String> {
     let root = root().ok_or("Wings has no data folder")?;

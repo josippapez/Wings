@@ -494,7 +494,7 @@ fn view() -> Vec<Node> {
         let problem = (page.staged.is_none()).then(|| page.problem.as_deref().map(|problem| notice("danger", problem))).flatten();
         let column = stack().prop("gap", "l").children(engine_settings::view()).children([search, privacy]).maybe(ask).maybe(cleared).children(cookies(&page, keep, signins)).children(extensions(&page)).maybe(problem);
         let dialog = page.staged.as_ref().map(|staged| dialog_for(staged, page.adding, page.problem.as_deref(), cancel, add));
-        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page)).chain(engine_settings::remove_dialog()))]
+        vec![column_page(toolbar("Browser", None), std::iter::once(column).chain(dialog).chain(remove_dialog(&page)))]
     })
 }
 

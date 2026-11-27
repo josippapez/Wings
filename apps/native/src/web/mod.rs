@@ -51,6 +51,16 @@ pub enum Job {
     /// The profile's web views use this engine from now on (`engine::set_choice`), then the window redraws so they are
     /// placed again.
     Engine(Profile, engine::Kind),
+    /// Wings asks the person in its own dialog, before something a page can't undo: `true` only on its action's button.
+    Confirm(Confirm),
+}
+
+/// A question Wings asks in its own dialog, which no click in a page answers. Its words are Wings', never a plugin's.
+pub struct Confirm {
+    pub question: &'static str,
+    pub detail: &'static str,
+    /// The button that goes ahead; the other is Cancel.
+    pub action: &'static str,
 }
 
 /// The one gate every command a plugin's page sends its web view goes through, here and in WebKit (`views::update`,

@@ -1982,6 +1982,13 @@ fn run_web(job: crate::web::Job, answer: std::sync::mpsc::Sender<Result<String, 
             window.refresh();
             let _ = answer.send(result);
         }
+        Job::Confirm(confirm) => {
+            let chosen = window.prompt(gpui::PromptLevel::Warning, confirm.question, Some(confirm.detail), &[confirm.action, "Cancel"], cx);
+            cx.spawn(async move |_, _| {
+                let _ = answer.send(Ok((chosen.await == Ok(0)).to_string()));
+            })
+            .detach();
+        }
     }
 }
 

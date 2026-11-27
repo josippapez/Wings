@@ -62,6 +62,8 @@ pub(super) enum Seen {
     SharedSetup(String, bool),
     /// A plugin's label by a title bar button: plugin, sidebar or view, label.
     SidebarLabel(String, String, Option<SidebarLabel>),
+    /// Wings asked in its own dialog: question, what it says under it.
+    Confirm(String, String),
 }
 
 pub(super) struct FakeEnv {
@@ -397,6 +399,17 @@ impl Env for FakeEnv {
     fn pick_files(&self, multiple: bool, reply: crate::page::runtime::Reply) {
         self.record(Seen::PickFiles(multiple));
         reply.ok(super::picked_images(&self.picks.lock().unwrap()));
+    }
+
+    /// Wings' own dialog, which the person cancels here; nothing else has a window to run in.
+    fn web(&self, job: crate::web::Job, done: Box<dyn FnOnce(Result<String, String>) + Send>) {
+        match job {
+            crate::web::Job::Confirm(confirm) => {
+                self.record(Seen::Confirm(confirm.question.into(), confirm.detail.into()));
+                done(Ok("false".into()))
+            }
+            _ => done(Err("Web pages aren't available in this host".into())),
+        }
     }
 
     fn set_badge(&self, plugin: &str, pane: &str, badge: Option<Badge>) {

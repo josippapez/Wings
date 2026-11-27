@@ -1,14 +1,15 @@
 //! The Engine section of the Browser's settings: WebKit, which is built in, or Chromium, which runs Chrome extensions
-//! like Bitwarden and is downloaded once, on the person's click. Wings (`webEngine`) fetches, checks and unpacks it; the
-//! page calls each step in turn so the row can say which one it is on. No percentage and no timer: the row's words change
-//! three times and its spinner is the app's, so nothing redraws the page while it works.
+//! like Bitwarden and is downloaded once, on the person's click. Wings (`webEngine`) fetches, checks and unpacks it, and
+//! switches to it as the install ends; the page calls each step in turn so the row can say which one it is on. No
+//! percentage and no timer: the row's words change three times and its spinner is the app's, so nothing redraws the page
+//! while it works. Removing it Wings asks about in its own dialog.
 
 use serde_json::Value;
 use std::cell::RefCell;
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Entry, Node, actions, badge, button, dialog, entry, error_state, icon, muted, rows_card, section, setting, spinner, text},
+    ui::{Entry, Node, badge, button, entry, error_state, icon, muted, rows_card, section, setting, spinner, text},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +28,8 @@ struct Info {
     /// False on a Mac that can't run Chromium, with `why`.
     available: bool,
     why: Option<String>,
+    /// Why Chromium didn't start: its files failed Wings' check.
+    problem: Option<String>,
 }
 
 fn parse(answer: &Value) -> Info {
@@ -37,6 +40,7 @@ fn parse(answer: &Value) -> Info {
         disk_bytes: answer["diskBytes"].as_u64().unwrap_or_default(),
         available: answer["available"].as_bool().unwrap_or(true),
         why: answer["why"].as_str().map(str::to_owned),
+        problem: answer["problem"].as_str().map(str::to_owned),
     }
 }
 
@@ -54,7 +58,6 @@ struct State {
     step: Option<Step>,
     /// Why the last setting up or switching failed: shown with Try again.
     failed: Option<String>,
-    confirm_remove: bool,
     removing: bool,
 }
 
@@ -78,8 +81,8 @@ pub fn load() {
     });
 }
 
-/// Downloads, checks and installs Chromium, then switches to it. Runs in the click's turn: the host only starts a
-/// download right after one.
+/// Downloads, checks and installs Chromium, which switches to it. Runs in the click's turn: the host only starts a
+/// download right after one, and installs only what that click downloaded.
 fn get_chromium() {
     if with(|state| std::mem::replace(&mut state.step, Some(Step::Download)).is_some()) {
         return;
@@ -91,8 +94,7 @@ fn get_chromium() {
             with(|state| state.step = Some(Step::Verify));
             host::web_engine_verify().await?;
             with(|state| state.step = Some(Step::Install));
-            host::web_engine_install().await?;
-            host::web_engine_use("chromium").await
+            host::web_engine_install().await
         }
         .await;
         with(|state| {
@@ -113,9 +115,9 @@ fn use_engine(kind: Kind) {
     });
 }
 
+/// Runs in the click's turn too: Wings then asks in its own dialog, and answers false when the person cancels.
 fn remove() {
     with(|state| {
-        state.confirm_remove = false;
         state.removing = true;
         state.failed = None;
     });
@@ -170,29 +172,19 @@ pub fn view() -> Vec<Node> {
         let chromium = row("Chromium", small(detail), info.engine == Kind::Chromium, control);
         let mut rows = vec![webkit, chromium];
         if info.installed {
-            let remove = button("Remove", "outline", state.removing, || with(|state| state.confirm_remove = true)).size("sm");
+            let remove = button("Remove", "outline", state.removing, remove).size("sm");
             rows.push(setting("Remove Chromium", "Deletes it and what it kept for sites.", remove));
         }
         let mut out = vec![section("Engine", Some("Sign-ins and site data don't carry over between engines."), [rows_card(rows)])];
+        if let Some(problem) = info.problem.as_deref().filter(|_| info.installed) {
+            out.push(error_state("Chromium can't start", problem, None));
+        }
         if let Some(error) = &state.failed {
             let retry: Box<dyn Fn()> = if info.installed { Box::new(load) } else { Box::new(get_chromium) };
             out.push(error_state("Couldn't set up Chromium", error, Some(("Try again", retry))));
         }
         out
     })
-}
-
-/// Asks before Chromium goes, as a dialog over the page wherever the page is scrolled to.
-pub fn remove_dialog() -> Option<Node> {
-    if !with(|state| state.confirm_remove) {
-        return None;
-    }
-    let cancel = || with(|state| state.confirm_remove = false);
-    Some(
-        dialog("Remove Chromium?", 420, cancel)
-            .child(muted("Browser tabs switch back to WebKit, and your Chromium sign-ins and site data are deleted."))
-            .child(actions(Some(button("Cancel", "ghost", false, cancel)), [button("Remove", "destructive", false, remove)])),
-    )
 }
 
 #[cfg(test)]
@@ -208,7 +200,7 @@ mod tests {
     }
 
     fn drawn() -> String {
-        wings_plugin::ui::export(view().into_iter().chain(remove_dialog()).collect::<Vec<_>>()).0.to_string()
+        wings_plugin::ui::export(view()).0.to_string()
     }
 
     fn shows(drawn: &str, words: &[&str]) {
@@ -275,7 +267,7 @@ mod tests {
         let steps: Vec<(&str, &str)> = sent.iter().map(|(call, words)| (call.as_str(), words.as_str())).collect();
         assert_eq!(
             steps,
-            [("status", ""), ("download", "Downloading"), ("verify", "Verifying"), ("install", "Installing"), ("use chromium", "Installing"), ("status", "")]
+            [("status", ""), ("download", "Downloading"), ("verify", "Verifying"), ("install", "Installing"), ("status", "")]
         );
         assert_eq!(with(|state| state.step), None);
     }
@@ -291,7 +283,7 @@ mod tests {
         let now = drawn();
         shows(&now, &["Couldn't set up Chromium", error, "Try again", "danger"]);
         let done: Vec<String> = calls.borrow().iter().map(|(call, _)| call.clone()).collect();
-        assert!(!done.contains(&"install".to_owned()) && !done.contains(&"use chromium".to_owned()), "{done:?}");
+        assert!(!done.contains(&"install".to_owned()), "{done:?}");
         // Try again starts over from the download.
         host_answers(status("webkit", false, true), None);
         get_chromium();
@@ -309,26 +301,39 @@ mod tests {
     }
 
     #[test]
-    fn with_chromium_on_it_is_marked_and_there_is_a_remove_row_that_asks_first() {
+    fn with_chromium_on_it_is_marked_and_its_remove_row_leaves_the_asking_to_wings() {
         let calls = host_answers(status("chromium", true, true), None);
         load();
         testing::settle();
         let now = drawn();
         shows(&now, &["Remove Chromium", "Deletes it and what it kept for sites.", "\"Remove\"", "\"Use\""]);
-        assert!(!now.contains("Remove Chromium?"), "{now}");
+        assert!(!now.contains("Dialog"), "{now}");
         // The WebKit row offers Use, and it asks for webkit.
         use_engine(Kind::WebKit);
         testing::settle();
         assert!(calls.borrow().iter().any(|(call, _)| call == "use webkit"));
-        // Remove opens a dialog with the words, and only its Remove calls the host.
-        with(|state| state.confirm_remove = true);
-        let now = drawn();
-        shows(&now, &["\"Dialog\"", "Remove Chromium?", "Browser tabs switch back to WebKit, and your Chromium sign-ins and site data are deleted.", "\"Cancel\"", "\"destructive\""]);
-        assert!(!calls.borrow().iter().any(|(call, _)| call == "remove"));
+        // Remove calls the host in the click's turn, which asks in Wings' own dialog: the page draws none of its own,
+        // and a cancel (false) is no error.
         remove();
         testing::settle();
         assert!(calls.borrow().iter().any(|(call, _)| call == "remove"));
-        assert!(!drawn().contains("Remove Chromium?"));
+        let now = drawn();
+        assert!(!now.contains("Dialog") && !now.contains("Couldn't set up Chromium"), "{now}");
+    }
+
+    #[test]
+    fn chromium_whose_files_failed_their_check_says_so_beside_the_remove_row() {
+        let mut broken = status("chromium", true, true);
+        broken["problem"] = json!("Chromium's files were changed after install. Remove and download it again.");
+        host_answers(broken, None);
+        load();
+        testing::settle();
+        shows(&drawn(), &["Chromium can't start", "Chromium's files were changed after install. Remove and download it again.", "danger", "Remove Chromium"]);
+        // Not before Wings found anything.
+        host_answers(status("chromium", true, true), None);
+        load();
+        testing::settle();
+        assert!(!drawn().contains("Chromium can't start"));
     }
 
     #[test]

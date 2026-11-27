@@ -190,11 +190,17 @@ pub(super) fn browser(out: PathBuf) {
     assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo");
     let garbage = out.join("fixture-engine-garbage.bin");
     std::fs::write(&garbage, b"not the archive").unwrap();
-    // (state, installed and on, the file Download reads, whether to press Download first)
-    let states: [(&str, bool, Option<&std::path::Path>, bool); 4] =
-        [("webkit", false, None, false), ("downloading", false, Some(fifo.as_path()), true), ("on", true, None, false), ("failed", false, Some(garbage.as_path()), true)];
-    for width in [1000.0, 640.0] {
-        for (name, on, archive, download) in &states {
+    // (state, installed and on, the file Download reads, whether to press Download first). Last, "broken": installed and
+    // on, but its files failed the check as Chromium started, which Wings remembers for the rest of the run.
+    let states: [(&str, bool, Option<&std::path::Path>, bool); 5] = [
+        ("webkit", false, None, false),
+        ("downloading", false, Some(fifo.as_path()), true),
+        ("on", true, None, false),
+        ("failed", false, Some(garbage.as_path()), true),
+        ("broken", true, None, false),
+    ];
+    for (name, on, archive, download) in &states {
+        for width in [1000.0, 640.0] {
             let home = out.join(format!("fixture-home-engine-{name}"));
             let _ = std::fs::remove_dir_all(&home);
             if *on {
@@ -202,6 +208,10 @@ pub(super) fn browser(out: PathBuf) {
                 std::fs::create_dir_all(version.join("Wings Chromium.app")).unwrap();
                 std::fs::write(version.join("finished"), b"").unwrap();
                 std::fs::write(engine_root(&home).join("choice.json"), json!({ "browser.shot": "chromium" }).to_string()).unwrap();
+                // The fixture's empty bundle is not the engine Wings pins.
+                if *name == "broken" {
+                    assert!(wings_native::web::engine::verify_bundle(&version.join("Wings Chromium.app")).is_err());
+                }
             }
             std::fs::create_dir_all(&home).unwrap();
             unsafe { std::env::set_var("HOME", &home) };
@@ -224,11 +234,6 @@ pub(super) fn browser(out: PathBuf) {
                 wait(&mut cx, window, Duration::from_millis(1500));
             }
             save(&mut cx, window, out.join(format!("browser-engine-{name}-{width}.png")));
-            if *on {
-                assert!(handle.read_with(&cx, |view, _| view.press("Remove", 0)).unwrap(), "no Remove button");
-                wait(&mut cx, window, Duration::from_millis(500));
-                save(&mut cx, window, out.join(format!("browser-engine-remove-{width}.png")));
-            }
             let _ = cx.update_window(window, |_, window, _| window.remove_window());
         }
     }

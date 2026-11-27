@@ -19,6 +19,10 @@ static FOUND: std::sync::Mutex<std::collections::BTreeMap<String, Vec<PathBuf>>>
 /// The most bytes of a store's package: what `wings_web_extensions::unpack` takes at most, unpacked.
 const PACKAGE_MAX: u64 = wings_web_extensions::MAX_TOTAL_BYTES;
 
+/// The profile whose page's click downloaded the Chromium engine that waits to be installed: only it may install it, once.
+static FETCHED_FOR: std::sync::Mutex<Option<Profile>> = std::sync::Mutex::new(None);
+const NOT_FETCHED: &str = "A page can install Chromium only after you click to download it there";
+
 impl Shared {
     fn web_profile(&self) -> Profile {
         Profile::of(&self.config.id, &self.config.scope, &self.config.root)
@@ -261,12 +265,32 @@ impl Shared {
                     "engine": engine_name, "installed": installed, "version": engine::PINNED.version,
                     "downloadBytes": engine::PINNED.size, "diskBytes": engine::PINNED.unpacked,
                     "available": available.is_ok(), "why": available.err(),
+                    // Chromium's files failed their check as it started this run (`engine::verify_bundle`).
+                    "problem": engine::failed_check().filter(|_| installed),
                 })))
             }
-            // Each step off the frame's thread: the page calls them in turn so it can say which it is on.
-            ("webEngine", "download") => self.off_thread(reply, |_| engine::download().map(|()| "null".into())),
+            // Each step off the frame's thread: the page calls them in turn so it can say which it is on. The download
+            // needs your click (`needs_click`), and only the profile it was for may install it, once.
+            ("webEngine", "download") => self.off_thread(reply, move |_| {
+                engine::download()?;
+                *FETCHED_FOR.lock().unwrap() = Some(profile);
+                Ok("null".into())
+            }),
             ("webEngine", "verify") => self.off_thread(reply, |_| engine::verify().map(|()| "null".into())),
-            ("webEngine", "install") => self.off_thread(reply, |_| engine::install().map(|()| "null".into())),
+            // Installs what your click in this page downloaded and switches its web views to it: the end of the steps
+            // that click started, which no plugin starts on its own.
+            ("webEngine", "install") => {
+                if FETCHED_FOR.lock().unwrap().take_if(|fetched| *fetched == profile).is_none() {
+                    return reply.err(NOT_FETCHED.into());
+                }
+                let env = access.env.clone();
+                self.off_thread(reply, move |_| {
+                    engine::install()?;
+                    let (switched, answer) = std::sync::mpsc::channel();
+                    env.web(Job::Engine(profile, engine::Kind::Chromium), Box::new(move |done| drop(switched.send(done))));
+                    answer.recv().unwrap_or_else(|_| Err("The Wings window didn't answer".into()))
+                })
+            }
             ("webEngine", "use") => {
                 let kind = match text("engine").as_deref() {
                     Some("chromium") => engine::Kind::Chromium,
@@ -283,15 +307,30 @@ impl Shared {
                 }
                 access.env.web(Job::Engine(profile, kind), done(reply))
             }
+            // Every profile's Chromium data goes, so only the Browser asks, and only Wings' own dialog says yes: `true`
+            // once it is gone, `false` when you cancel.
             ("webEngine", "remove") => {
-                // The window switches to WebKit and places its pages again first, so nothing has Chromium's files open
-                // while they go; then the files go, off the window's thread.
-                let this = self.clone();
+                if !(access.builtin && id == "browser") {
+                    return reply.err("Only the Browser can remove Chromium".into());
+                }
+                let (this, env) = (self.clone(), access.env.clone());
                 access.env.web(
-                    Job::Engine(profile, engine::Kind::WebKit),
-                    Box::new(move |switched| match switched {
-                        Ok(_) => this.off_thread(reply, |_| engine::remove().map(|()| "null".into())),
-                        Err(error) => reply.err(error),
+                    Job::Confirm(engine::REMOVE),
+                    Box::new(move |answer| {
+                        match answer.as_deref() {
+                            Ok("true") => {}
+                            Ok(_) => return reply.ok("false".into()),
+                            Err(error) => return reply.err(error.clone()),
+                        }
+                        // The window switches to WebKit and places its pages again first, so nothing has Chromium's
+                        // files open while they go; then the files go, off the window's thread.
+                        env.web(
+                            Job::Engine(profile, engine::Kind::WebKit),
+                            Box::new(move |switched| match switched {
+                                Ok(_) => this.off_thread(reply, |_| engine::remove().map(|()| "true".into())),
+                                Err(error) => reply.err(error),
+                            }),
+                        )
                     }),
                 )
             }
@@ -340,8 +379,8 @@ impl Shared {
 }
 
 /// Whether the call `method` with `params` waits for your click: picking, staging, adding, turning on or off and removing
-/// an extension, clearing the site data, downloading or removing Chromium and importing cookies happen only as the answer to one, never by the plugin
-/// alone.
+/// an extension, clearing the site data, downloading, choosing or removing an engine and importing cookies happen only
+/// as the answer to one, never by the plugin alone. Installing Chromium follows the click that downloaded it (`install`).
 pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool {
     let action = params.get("action").and_then(Value::as_str);
     // Listing another browser's extensions reads its profiles, and checking again may show the Keychain's prompt: only
@@ -350,7 +389,7 @@ pub(in crate::page::plugin) fn needs_click(method: &str, params: &Value) -> bool
         (method, action),
         ("webExtensions", Some("stage" | "add" | "installed" | "setEnabled" | "remove" | "checkAgain"))
             | ("webData", Some("clear"))
-            | ("webEngine", Some("download" | "remove"))
+            | ("webEngine", Some("download" | "use" | "remove"))
             | ("browserCookies", Some("import"))
     )
 }
@@ -447,7 +486,7 @@ mod tests {
     };
 
     #[test]
-    fn the_engine_call_needs_the_web_view_permission_and_a_click_to_download_or_remove() {
+    fn the_engine_call_needs_the_web_view_permission_and_a_click_to_download_choose_or_remove() {
         let without = Rig::new(json!({ "permissions": { "openUrl": ["https://"] } }), vec![]);
         let page = Caller::start(&without.host);
         assert_eq!(page.call("webEngine", json!({ "action": "status" })), Err("probe may not show web pages".into()));
@@ -462,18 +501,72 @@ mod tests {
                 "{action}"
             );
         }
-        // The rest of the steps need no click: they only work on what a click started, and `use` needs it installed.
+        // Nor does a plugin switch its pages to an engine on its own, either way.
+        for engine in ["chromium", "webkit"] {
+            assert_eq!(
+                page.call("webEngine", json!({ "action": "use", "engine": engine })),
+                Err("A page can change the browser engine only right after you click or type in it".into()),
+                "{engine}"
+            );
+        }
         let status = page.call("webEngine", json!({ "action": "status" })).unwrap();
         assert_eq!(status["version"], engine::PINNED.version);
         assert_eq!(status["downloadBytes"], engine::PINNED.size);
         assert_eq!(status["diskBytes"], engine::PINNED.unpacked);
         assert_eq!(status["engine"], "webkit");
-        assert_eq!(page.call("webEngine", json!({ "action": "use", "engine": "firefox" })), Err(r#"use takes engine: "chromium" or "webkit""#.into()));
+        assert_eq!(
+            page.call_after_click("webEngine", json!({ "action": "use", "engine": "firefox" })),
+            Err(r#"use takes engine: "chromium" or "webkit""#.into())
+        );
         assert_eq!(page.call("webEngine", json!({ "action": "nope" })), Err(r#"webEngine has no action "nope""#.into()));
-        assert!(super::needs_click("webEngine", &json!({ "action": "download" })));
-        assert!(super::needs_click("webEngine", &json!({ "action": "remove" })));
-        assert!(!super::needs_click("webEngine", &json!({ "action": "status" })));
-        assert!(!super::needs_click("webEngine", &json!({ "action": "use", "engine": "webkit" })));
+        for action in [json!({ "action": "download" }), json!({ "action": "use", "engine": "webkit" }), json!({ "action": "remove" })] {
+            assert!(super::needs_click("webEngine", &action), "{action}");
+        }
+        // Checking needs nothing, and installing follows the click that downloaded (below).
+        for action in ["status", "verify", "install"] {
+            assert!(!super::needs_click("webEngine", &json!({ "action": action })), "{action}");
+        }
+    }
+
+    /// A plugin can't install Chromium and switch to it on its own: only the profile whose page's click downloaded it
+    /// installs it, and a click alone isn't a download.
+    #[test]
+    fn chromium_installs_only_for_the_profile_whose_click_downloaded_it() {
+        let web = Rig::new(json!({ "permissions": { "webView": true } }), vec![]);
+        let page = Caller::start(&web.host);
+        let refused = Err(super::NOT_FETCHED.to_owned());
+        assert_eq!(page.call("webEngine", json!({ "action": "install" })), refused);
+        assert_eq!(page.call_after_click("webEngine", json!({ "action": "install" })), refused);
+        let other = crate::web::Profile::of("other", "main", std::path::Path::new("/nowhere/plugin-storage"));
+        *super::FETCHED_FOR.lock().unwrap() = Some(other.clone());
+        assert_eq!(page.call("webEngine", json!({ "action": "install" })), refused);
+        // Still the other profile's to install.
+        assert_eq!(super::FETCHED_FOR.lock().unwrap().take(), Some(other));
+    }
+
+    /// Removing deletes every profile's Chromium data, so only Wings' own Browser asks, after a click, and Wings asks the
+    /// person in its own dialog first: cancelled, nothing goes.
+    #[test]
+    fn only_the_browser_removes_chromium_and_only_once_you_say_so_in_wings_dialog() {
+        use crate::page::plugin::testing::{Seen, plugin};
+        let asked = |rig: &Rig| rig.env.seen().into_iter().any(|seen| matches!(seen, Seen::Confirm(..)));
+        let manifest = |id: &str| plugin(json!({ "id": id, "permissions": { "webView": true } }));
+        for (rig, what) in [(Rig::with(manifest("probe"), true, vec![]), "another of Wings' plugins"), (Rig::with(manifest("browser"), false, vec![]), "a plugin named browser")] {
+            let page = Caller::start(&rig.host);
+            assert_eq!(page.call_after_click("webEngine", json!({ "action": "remove" })), Err("Only the Browser can remove Chromium".into()), "{what}");
+            assert!(!asked(&rig), "{what}");
+        }
+        let browser = Rig::with(manifest("browser"), true, vec![]);
+        let page = Caller::start(&browser.host);
+        assert_eq!(
+            page.call("webEngine", json!({ "action": "remove" })),
+            Err("A page can download or remove Chromium only right after you click or type in it".into())
+        );
+        assert!(!asked(&browser));
+        assert_eq!(page.call_after_click("webEngine", json!({ "action": "remove" })), Ok(json!(false)));
+        let words = Seen::Confirm(engine::REMOVE.question.into(), engine::REMOVE.detail.into());
+        assert!(browser.env.seen().contains(&words), "{:?}", browser.env.seen());
+        assert!(engine::REMOVE.detail.contains("deletes Chromium and its sign-ins and site data for every profile"));
     }
 
     #[test]
