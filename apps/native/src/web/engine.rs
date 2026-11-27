@@ -53,13 +53,13 @@ pub struct Pinned {
 }
 
 pub const PINNED: Pinned = Pinned {
-    version: "156.0.31",
-    file: "wings-chromium-156.0.31-darwin-aarch64.tar.gz",
-    url: "https://github.com/josippapez/Wings/releases/download/chromium-156.0.31/wings-chromium-156.0.31-darwin-aarch64.tar.gz",
-    size: 147_328_901,
-    sha256: "fa275c5921611e274965793715f6f21927e8b01c16bfa9421d457f996fad668a",
-    unpacked: 343_012_256,
-    tree: "38d65af53edd49714bac7895e364d25a5b9c8a2c87dbea0706a2cc867787aaca",
+    version: "158.0.6",
+    file: "wings-chromium-158.0.6-darwin-aarch64.tar.gz",
+    url: "https://github.com/josippapez/Wings/releases/download/chromium-158.0.6/wings-chromium-158.0.6-darwin-aarch64.tar.gz",
+    size: 153_648_932,
+    sha256: "8c5b6d9ba9f282932ed056f480736709083560341a5f6bc932cdd863c0fdefea",
+    unpacked: 356_561_806,
+    tree: "e40d3198f914aea1e3ceb36da5c7ec88f785af988eb2bd1a0182f52e7916bf9e",
 };
 
 /// What the unpacked archive may hold beyond `Pinned::unpacked`: tar's headers and padding.
@@ -96,6 +96,20 @@ pub fn profiles() -> Option<PathBuf> {
 fn installed_in(root: &Path, pin: &Pinned) -> Option<PathBuf> {
     let folder = root.join(pin.version);
     (folder.join(FINISHED).is_file() && folder.join(BUNDLE).is_dir()).then(|| folder.join(BUNDLE))
+}
+
+/// Whether the only engine installed is one an older Wings pinned: this build runs only `PINNED`, so its Settings offer
+/// that one as an update instead of the old one silently going unused.
+pub fn outdated() -> bool {
+    root().is_some_and(|root| outdated_in(&root, &PINNED))
+}
+
+fn outdated_in(root: &Path, pin: &Pinned) -> bool {
+    installed_in(root, pin).is_none()
+        && fs::read_dir(root).into_iter().flatten().flatten().any(|entry| {
+            let (name, folder) = (entry.file_name(), entry.path());
+            name.to_string_lossy().starts_with(|c: char| c.is_ascii_digit()) && folder.join(FINISHED).is_file() && folder.join(BUNDLE).is_dir()
+        })
 }
 
 fn downloads_in(root: &Path) -> PathBuf {
@@ -298,7 +312,7 @@ fn note_check(failed: Option<String>) {
 
 /// Whether the engine at `bundle` is, file for file, the one this build pins (`Pinned::tree`): what Wings unpacked from
 /// the archive it checked, with nothing changed, added or taken away since. Run it off the main thread before every
-/// start of Chromium: it reads every byte of the bundle (343 MB, 0.22 s in a release build on an M-series Mac).
+/// start of Chromium: it reads every byte of the bundle (357 MB, 0.19 s in a release build on an M-series Mac).
 ///
 /// It proves the files were right as it read them. A program running as you can still change one between this check and
 /// CEF loading it; only an engine signed with a Developer ID, the hardened runtime and library validation closes that.

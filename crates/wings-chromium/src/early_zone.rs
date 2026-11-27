@@ -2,7 +2,7 @@
 //!
 //! When the CEF framework loads, a static constructor of Chromium's PartitionAlloc makes its zone malloc's default
 //! (`InitializeDefaultMallocZoneWithPartitionAlloc`, `partition_alloc/shim/allocator_shim_override_apple_default_zone.h`
-//! at 156). With the system's zone first, it takes that zone out of malloc's list and puts it back, and a `free` on
+//! at 158). With the system's zone first, it takes that zone out of malloc's list and puts it back, and a `free` on
 //! another thread in between finds no zone for its block and stops the process
 //! (`allocator_shim::TryFreeDefaultFallbackToFindZoneAndFree`). Wings loads CEF when the Browser first needs it, with
 //! dozens of threads allocating.

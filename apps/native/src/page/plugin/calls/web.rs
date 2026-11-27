@@ -297,7 +297,7 @@ impl Shared {
                 let (kind, installed, available) = (engine::choice(&profile), engine::bundle().is_some(), engine::available());
                 let engine_name = if kind == engine::Kind::Chromium { "chromium" } else { "webkit" };
                 reply.done(to_json(&json!({
-                    "engine": engine_name, "installed": installed, "version": engine::PINNED.version,
+                    "engine": engine_name, "installed": installed, "outdated": engine::outdated(), "version": engine::PINNED.version,
                     "downloadBytes": engine::PINNED.size, "diskBytes": engine::PINNED.unpacked,
                     "available": available.is_ok(), "why": available.err(),
                     // Chromium's files failed their check as it started this run (`engine::verify_bundle`).
@@ -555,6 +555,7 @@ mod tests {
         assert_eq!(status["downloadBytes"], engine::PINNED.size);
         assert_eq!(status["diskBytes"], engine::PINNED.unpacked);
         assert_eq!(status["engine"], "webkit");
+        assert_eq!(status["outdated"], false);
         assert_eq!(
             page.call_after_click("webEngine", json!({ "action": "use", "engine": "firefox" })),
             Err(r#"use takes engine: "chromium" or "webkit""#.into())

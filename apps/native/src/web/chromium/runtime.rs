@@ -199,7 +199,7 @@ fn logging(root: &std::path::Path, debug: bool) -> (LogSeverity, Option<std::pat
 
 /// Chrome's own password manager and autofill, off in every profile: they'd offer to save what is typed in a page, and
 /// with the mock keychain (`switches`) what Chrome saved would be kept as good as unencrypted. Wings has its own
-/// extensions for passwords. (`password_manager_pref_names.h`, `autofill_prefs.h` at 156.)
+/// extensions for passwords. (`password_manager_pref_names.h`, `autofill_prefs.h` at 158.)
 pub const OFF: [&str; 4] = ["credentials_enable_service", "credentials_enable_autosignin", "autofill.profile_enabled", "autofill.credit_card_enabled"];
 
 /// The choosers of devices a page may ask for, blocked by default, so a page's request is refused at once: Chrome's own
@@ -442,12 +442,14 @@ pub fn switches(piped: bool) -> Vec<String> {
         // Nor do two features the switches above leave on: the omnibox's AI Mode asking Google whether this Chromium
         // may use it (`aim_eligibility_fetch`, www.google.com/async/folae), and connecting ahead of time to the default
         // search engine, Google (`SearchEnginePreconnector`). Nor a spare page process started ahead of the next page
-        // (`kSpareRendererForSitePerProcess`), which stayed, 74 MB, with every Browser tab closed. Chromium 156's names;
+        // (`kSpareRendererForSitePerProcess`), which stayed, 74 MB, with every Browser tab closed. Chromium 158's names;
         // CEF's own list is kept (`merged`).
         "disable-features=AimEnabled,PreconnectToSearch,SpareRendererForSitePerProcess",
         // Nor Chrome's on-device AI model asking update.googleapis.com for its manifest (`update_client`, component
         // ceofaddefefcbblgcgnibnonglccbfja), which it does on demand past disable-component-update: an override that
-        // names no manifest leaves it none to fetch (`CreateManifestDelegate` in Chromium 156).
+        // names no manifest leaves it none to fetch (`CreateManifestDelegate` in Chromium 158). Since 158 the switch
+        // also turns the on-device AI setting's default on (`ShouldEnableOnDeviceAiByDefault`); the override still
+        // installs no model.
         "optimization-guide-manifest-override=/dev/null",
     ]
     .map(String::from)

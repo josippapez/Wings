@@ -3,19 +3,19 @@
 # as `crates/wings-chromium/src/engine.rs` expects, signed, then archived as a .tar.gz with the bundle folder at its root.
 # Run it from the main checkout, through the build queue:
 #   sh scripts/build.sh sh apps/native/scripts/package-chromium-engine.sh
-# `CEF_PATH` is the exported CEF SDK (default: the spike's, ~/Library/Caches/wings-chromium-spike/sdk). It prints the
-# archive's size, unpacked size and SHA-256, and the tree hash of the bundle Wings unpacks it to, which `PINNED` in
+# `CEF_PATH` is the exported CEF SDK (default: the one builds download, apps/native/target/cef-sdk/<version>). It prints
+# the archive's size, unpacked size and SHA-256, and the tree hash of the bundle Wings unpacks it to, which `PINNED` in
 # engine.rs holds. Nothing is published.
 set -eu
 repo=$(cd "$(dirname "$0")/../../.." && pwd -P)
-version=156.0.31
+version=158.0.6
 name="wings-chromium-$version-darwin-aarch64.tar.gz"
 framework="Chromium Embedded Framework.framework"
 helper="Wings Chromium Helper"
 out="$repo/apps/native/target/chromium-engine"
 
-if [ -z "${CEF_PATH:-}" ] && [ -d "$HOME/Library/Caches/wings-chromium-spike/sdk" ]; then
-  CEF_PATH="$HOME/Library/Caches/wings-chromium-spike/sdk"
+if [ -z "${CEF_PATH:-}" ] && [ -d "$repo/apps/native/target/cef-sdk/$version/cef_macos_aarch64" ]; then
+  CEF_PATH="$repo/apps/native/target/cef-sdk/$version/cef_macos_aarch64"
 fi
 if [ -z "${CEF_PATH:-}" ] || [ ! -d "$CEF_PATH/$framework" ]; then
   echo "Set CEF_PATH to the exported CEF SDK (the folder holding $framework)." >&2

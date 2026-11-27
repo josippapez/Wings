@@ -6,9 +6,9 @@ description = "Chromium (CEF, Chrome style) as an engine Wings downloads on dema
 publish = false
 
 [dependencies]
-# The version's build metadata (+156.0.31) is the CEF release cef-dll-sys builds its wrapper against; the engine folder
+# The version's build metadata (+158.0.6) is the CEF release cef-dll-sys builds its wrapper against; the engine folder
 # has to hold the same release. `CEF_PATH` points the build at an exported copy instead of downloading one per build.
-cef = { version = "=156.7.0", default-features = false, features = ["sandbox"] }
+cef = { version = "=158.0.0", default-features = false, features = ["sandbox"] }
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSEvent", "NSWindow", "NSRunningApplication", "NSView", "NSTextField", "NSControl", "NSButton", "NSButtonCell", "NSCell", "NSTextFieldCell", "NSActionCell", "NSMenu", "NSMenuItem", "NSGraphics", "NSScreen", "NSText", "NSGraphicsContext", "NSColor"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSString", "NSValue", "NSObject", "NSNotification", "NSDictionary", "NSEnumerator", "NSObjCRuntime", "NSThread"] }

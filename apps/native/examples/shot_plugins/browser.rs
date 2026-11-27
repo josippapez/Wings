@@ -285,21 +285,23 @@ pub(super) fn browser(out: PathBuf) {
     assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo");
     let garbage = out.join("fixture-engine-garbage.bin");
     std::fs::write(&garbage, b"not the archive").unwrap();
-    // (state, installed and on, the file Download reads, whether to press Download first). Last, "broken": installed and
-    // on, but its files failed the check as Chromium started, which Wings remembers for the rest of the run.
-    let states: [(&str, bool, Option<&std::path::Path>, bool); 5] = [
+    // (state, installed and on, the file Download reads, whether to press Download first). "broken": installed and on,
+    // but its files failed the check as Chromium started, which Wings remembers for the rest of the run. "outdated":
+    // installed and on by an older Wings, whose engine this one doesn't run.
+    let states: [(&str, bool, Option<&std::path::Path>, bool); 6] = [
         ("webkit", false, None, false),
         ("downloading", false, Some(fifo.as_path()), true),
         ("on", true, None, false),
         ("failed", false, Some(garbage.as_path()), true),
         ("broken", true, None, false),
+        ("outdated", true, None, false),
     ];
     for (name, on, archive, download) in &states {
         for width in [1000.0, 640.0] {
             let home = out.join(format!("fixture-home-engine-{name}"));
             let _ = std::fs::remove_dir_all(&home);
             if *on {
-                let version = engine_root(&home).join(wings_native::web::engine::PINNED.version);
+                let version = engine_root(&home).join(if *name == "outdated" { "156.0.31" } else { wings_native::web::engine::PINNED.version });
                 std::fs::create_dir_all(version.join("Wings Chromium.app")).unwrap();
                 std::fs::write(version.join("finished"), b"").unwrap();
                 std::fs::write(engine_root(&home).join("choice.json"), json!({ "browser.shot": "chromium" }).to_string()).unwrap();

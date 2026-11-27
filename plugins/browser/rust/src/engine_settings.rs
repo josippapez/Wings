@@ -23,6 +23,8 @@ enum Kind {
 struct Info {
     engine: Kind,
     installed: bool,
+    /// The only Chromium installed is one an older Wings pinned, which this one doesn't run: offered as an update.
+    outdated: bool,
     download_bytes: u64,
     disk_bytes: u64,
     /// False on a Mac that can't run Chromium, with `why`.
@@ -36,6 +38,7 @@ fn parse(answer: &Value) -> Info {
     Info {
         engine: if answer["engine"] == "chromium" { Kind::Chromium } else { Kind::WebKit },
         installed: answer["installed"].as_bool().unwrap_or_default(),
+        outdated: answer["outdated"].as_bool().unwrap_or_default(),
         download_bytes: answer["downloadBytes"].as_u64().unwrap_or_default(),
         disk_bytes: answer["diskBytes"].as_u64().unwrap_or_default(),
         available: answer["available"].as_bool().unwrap_or(true),
@@ -157,16 +160,21 @@ pub fn view() -> Vec<Node> {
             if info.engine == Kind::WebKit { in_use() } else { button("Use", "outline", false, || use_engine(Kind::WebKit)).size("sm") },
         );
         let features = "Runs Chrome extensions like Bitwarden.";
+        let get = if info.outdated { "Update" } else { "Download" };
         let (detail, control) = match (state.step, info) {
-            (Some(Step::Download), _) => (format!("Downloading {} MB", mb(info.download_bytes)), button("Download", "outline", true, || {}).size("sm")),
-            (Some(Step::Verify), _) => ("Verifying".to_owned(), button("Download", "outline", true, || {}).size("sm")),
-            (Some(Step::Install), _) => ("Installing".to_owned(), button("Download", "outline", true, || {}).size("sm")),
-            (None, info) if !info.available => (info.why.clone().unwrap_or_else(|| "Chromium can't run on this Mac".into()), button("Download", "outline", false, || {}).size("sm").disabled(true)),
+            (Some(Step::Download), _) => (format!("Downloading {} MB", mb(info.download_bytes)), button(get, "outline", true, || {}).size("sm")),
+            (Some(Step::Verify), _) => ("Verifying".to_owned(), button(get, "outline", true, || {}).size("sm")),
+            (Some(Step::Install), _) => ("Installing".to_owned(), button(get, "outline", true, || {}).size("sm")),
+            (None, info) if !info.available => (info.why.clone().unwrap_or_else(|| "Chromium can't run on this Mac".into()), button(get, "outline", false, || {}).size("sm").disabled(true)),
             (None, info) if info.engine == Kind::Chromium => (format!("{features} Takes {} MB on disk.", mb(info.disk_bytes)), in_use()),
             (None, info) if info.installed => (format!("{features} Takes {} MB on disk.", mb(info.disk_bytes)), button("Use", "outline", false, || use_engine(Kind::Chromium)).size("sm")),
+            (None, info) if info.outdated => (
+                format!("{features} Needs an update to run again: downloads {} MB once, {} MB on disk.", mb(info.download_bytes), mb(info.disk_bytes)),
+                button(get, "outline", false, get_chromium).size("sm"),
+            ),
             (None, info) => (
                 format!("{features} Downloads {} MB once, {} MB on disk.", mb(info.download_bytes), mb(info.disk_bytes)),
-                button("Download", "outline", false, get_chromium).size("sm"),
+                button(get, "outline", false, get_chromium).size("sm"),
             ),
         };
         let chromium = row("Chromium", small(detail), info.engine == Kind::Chromium, control);
@@ -289,6 +297,23 @@ mod tests {
         get_chromium();
         testing::settle();
         assert!(!drawn().contains("Couldn't set up Chromium"), "{}", drawn());
+    }
+
+    #[test]
+    fn chromium_an_older_wings_installed_is_offered_as_an_update_that_runs_every_step() {
+        let mut old = status("webkit", false, true);
+        old["outdated"] = json!(true);
+        let calls = host_answers(old, None);
+        load();
+        testing::settle();
+        let now = drawn();
+        shows(&now, &["Needs an update to run again: downloads 147 MB once, 343 MB on disk.", "\"Update\""]);
+        assert!(!now.contains("\"Download\"") && !now.contains("Remove Chromium"), "{now}");
+        assert_eq!(now.matches("In use").count(), 1, "WebKit runs the pages meanwhile: {now}");
+        get_chromium();
+        testing::settle();
+        let steps: Vec<String> = calls.borrow().iter().map(|(call, _)| call.clone()).collect();
+        assert_eq!(steps, ["status", "download", "verify", "install", "status"]);
     }
 
     #[test]

@@ -47,7 +47,7 @@ fn the_zone_goes_first_and_hands_every_allocation_to_the_system_zone() {
 /// Chromium's allocator takes over malloc as the engine loads while 16 threads allocate, grow and free memory, as
 /// Wings' history indexing does. Without the zone first, one of their frees lands while the system zone is out of
 /// malloc's list and the process stops in `TryFreeDefaultFallbackToFindZoneAndFree`. Needs an engine:
-/// `WINGS_CHROMIUM_ENGINE=<…/chromium/156.0.31/Wings Chromium.app>`, run with `--ignored chromium_takes_over`.
+/// `WINGS_CHROMIUM_ENGINE=<…/chromium/158.0.6/Wings Chromium.app>`, run with `--ignored chromium_takes_over`.
 #[test]
 #[ignore]
 fn chromium_takes_over_malloc_while_threads_allocate() {

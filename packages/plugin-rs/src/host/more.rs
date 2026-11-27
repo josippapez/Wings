@@ -258,9 +258,11 @@ pub fn web_data_clear_site(url: &str) -> Answer {
     call("webData", json!({ "action": "clearSite", "url": url }))
 }
 
-/// `wings.webEngine` `status`: `{ engine: "webkit" | "chromium", installed, version, downloadBytes, diskBytes, available,
-/// why, problem }`. `engine` is the one this plugin's web views use now, `available` is false on a Mac that can't run
-/// Chromium (`why` says why), `problem` why its files failed Wings' check. Needs `permissions.webView`. Wings 0.2.121.
+/// `wings.webEngine` `status`: `{ engine: "webkit" | "chromium", installed, outdated, version, downloadBytes, diskBytes,
+/// available, why, problem }`. `engine` is the one this plugin's web views use now, `outdated` true when the only
+/// Chromium installed is one an older Wings pinned (this Wings runs only `version`), `available` is false on a Mac that
+/// can't run Chromium (`why` says why), `problem` why its files failed Wings' check. Needs `permissions.webView`. Wings
+/// 0.2.121.
 pub fn web_engine_status() -> Answer {
     call("webEngine", json!({ "action": "status" }))
 }

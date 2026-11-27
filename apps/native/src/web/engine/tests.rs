@@ -88,6 +88,23 @@ fn a_folder_without_the_finished_marker_is_not_installed() {
     assert_eq!(installed_in(root.path(), &pin_for(b"x", 1)), None);
 }
 
+/// An engine an older Wings installed, of another version than this build pins, is out of date: its Settings offer the
+/// pinned one. Nothing installed, an install that didn't finish and the pinned one installed are not.
+#[test]
+fn only_a_finished_install_of_another_version_is_out_of_date() {
+    let pin = pin_for(b"x", 1);
+    let root = tempfile::tempdir().unwrap();
+    assert!(!outdated_in(root.path(), &pin), "nothing installed");
+    fs::create_dir_all(root.path().join("1.2.2/Wings Chromium.app")).unwrap();
+    assert!(!outdated_in(root.path(), &pin), "an install that didn't finish");
+    fs::write(root.path().join("1.2.2/finished"), "1.2.2").unwrap();
+    fs::create_dir_all(root.path().join("profiles/Default")).unwrap();
+    assert!(outdated_in(root.path(), &pin), "the older version, finished");
+    fs::create_dir_all(root.path().join("1.2.3/Wings Chromium.app")).unwrap();
+    fs::write(root.path().join("1.2.3/finished"), "1.2.3").unwrap();
+    assert!(!outdated_in(root.path(), &pin), "the pinned version installed");
+}
+
 #[test]
 fn a_download_of_another_size_is_refused_and_deleted() {
     let bytes = good();

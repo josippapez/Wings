@@ -478,7 +478,7 @@ fn forget_each(mut left: Vec<Forget>, then: Box<dyn FnOnce()>) {
     });
 }
 
-/// The folders of its own Chromium 156 keeps an extension's storage in, in a profile: `chrome.storage`'s three areas,
+/// The folders of its own Chromium 158 keeps an extension's storage in, in a profile: `chrome.storage`'s three areas,
 /// its rules for `declarativeNetRequest` (`extensions/common/constants.h`,
 /// `declarative_net_request/file_backed_ruleset_source.cc`), by its id, and its IndexedDB, by its origin
 /// (`content/browser/indexed_db/file_path_util.cc`: `chrome-extension_<id>_0`). What it keeps in databases all

@@ -1027,7 +1027,7 @@ mod tests {
             }
         }
         assert_eq!(find("recording")["inputSchema"]["properties"]["action"]["enum"], json!(["start", "status", "stop", "cancel"]));
-        assert_eq!(manifest["version"], "0.4.1");
+        assert_eq!(manifest["version"], "0.4.2");
         assert_eq!(manifest["minWingsVersion"], "0.2.129");
         let instructions = manifest["contributes"]["mcpInstructions"].as_str().unwrap();
         assert!(instructions.chars().count() <= 500 && instructions.contains("upload") && instructions.contains("recording") && instructions.contains("/tmp") && instructions.contains("demonstrate"), "{instructions}");
