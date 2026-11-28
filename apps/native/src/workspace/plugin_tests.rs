@@ -944,7 +944,13 @@ fn a_diff_docks_beside_the_tab_it_opened_from_and_shows_only_on_that_tab() {
     let at = diff_at();
     assert_eq!((at.left().as_f32(), at.right().as_f32()), docked);
 
-    // Its file list hides, and stays hidden for the next diff.
+    // The dock is too narrow for the code beside its file list, so it starts without it; the toggle opens it by hand,
+    // and shuts it, which stays shut for the next diff.
+    assert_eq!(crate::ui::spot_at("diff-code").unwrap().left(), at.left());
+    let toggle = crate::ui::spot_at("diff-files-toggle").unwrap().center();
+    window.simulate_click(toggle, MouseButton::Left);
+    window.draw();
+    assert_eq!(crate::ui::spot_at("diff-code").unwrap().left(), at.left() + px(224.0));
     let toggle = crate::ui::spot_at("diff-files-toggle").unwrap().center();
     window.simulate_click(toggle, MouseButton::Left);
     window.draw();
@@ -4867,4 +4873,35 @@ fn the_command_palette_is_centred_in_the_window() {
         open_side(&app, &mut window);
         check(&mut window, "both sidebars");
     }
+}
+
+/// A 640 window holds the project sidebar, the panes' 320 and the right panel's 250 only by taking the sidebar away: the
+/// panes had 142 points while the sidebar stayed docked.
+#[test]
+fn a_narrow_window_with_the_right_panel_open_keeps_the_main_column_its_320_by_stepping_the_sidebar_aside() {
+    let data = Data::temp();
+    install_sider(&data);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.simulate_resize(size(px(640.0), px(640.0)));
+    // The test window takes the new size without telling the window, which reads it again here.
+    window.update(|_, window, cx| window.bounds_changed(cx));
+    open_side(&app, &mut window);
+    window.draw();
+    window.read(|w, _| {
+        assert!(w.sidebar, "the user's choice is untouched");
+        assert!(!w.docked(), "the sidebar steps aside for the layout");
+        assert!(w.main_width(px(640.0)) >= 320.0, "main column {}", w.main_width(px(640.0)));
+    });
+    // Wide again, it docks again; and with the panel shut it stays docked at 640.
+    window.simulate_resize(size(px(1000.0), px(640.0)));
+    window.update(|_, window, cx| window.bounds_changed(cx));
+    window.draw();
+    window.read(|w, _| assert!(w.docked()));
+    window.simulate_resize(size(px(640.0), px(640.0)));
+    window.update(|w, window, cx| {
+        window.bounds_changed(cx);
+        w.close_right(cx);
+    });
+    window.draw();
+    window.read(|w, _| assert!(w.docked(), "no panel, no reason to step aside"));
 }

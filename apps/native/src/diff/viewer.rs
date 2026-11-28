@@ -76,6 +76,10 @@ pub struct Viewer {
     pub(crate) back: bool,
     /// Docked, the file list shows.
     dock_files: bool,
+    /// The file list was toggled by hand, so a narrow dock keeps it as chosen instead of hiding it.
+    files_touched: bool,
+    /// How wide the app draws the viewer, in points; 0 until it says (nothing counts as narrow then).
+    width: f32,
     /// Long lines wrap; else they scroll sideways.
     pub(crate) wrap: bool,
     /// The file list is a folder tree, else a flat list.
@@ -363,11 +367,11 @@ impl Render for Viewer {
                                 Icon::PanelLeft,
                                 "File list",
                                 None,
-                                self.dock_files,
+                                self.files_shown(),
                             )
                             .children(ui::spot(|| "diff-files-toggle".into()))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.choose_dock_files(!this.dock_files, cx)
+                                this.choose_dock_files(!this.files_shown(), cx)
                             })),
                         )
                     })
@@ -764,6 +768,49 @@ mod comment_tests {
         window.read(|v, _| assert!(v.discussion_open));
         window.simulate_keystroke("down");
         window.read(|v, _| assert!(!v.discussion_open && v.selected_file() == 0));
+    }
+
+    /// A dock too narrow for the code beside its 224 file list leaves the list out until you open it, and a card in a
+    /// narrow column spans it instead of sitting 48 points in: the cards had a word a line.
+    #[test]
+    fn a_narrow_dock_leaves_out_its_file_list_and_its_cards_span_the_column() {
+        let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n";
+        let (_app, mut window) = open(json!({ "patch": patch, "focus": { "path": "a.rs", "line": 2 }, "comments": [
+            comment(1, None, Some("a.rs"), Some(2)),
+            comment(3, None, None, None),
+            comment(4, None, Some("a.rs"), None),
+        ] }));
+        window.update(|v, _, cx| {
+            v.set_split(false, cx);
+            v.set_dock(true, true, cx);
+            v.set_width(520.0, cx);
+        });
+        window.draw();
+        window.read(|v, _| {
+            assert!(!v.files_shown(), "520 less the 224 list leaves the code under 480");
+            assert_eq!(v.discussion_count(), 1, "only the comment on the whole change; the other is its file's");
+        });
+        let code = crate::ui::spot_at("diff-code").unwrap();
+        assert_eq!(code.left(), px(0.0));
+        let card = crate::ui::spot_at("diff-thread-1").unwrap();
+        assert_eq!(card.left(), code.left() + px(12.0 + 1.0), "no indent past the line numbers");
+        // The toggle opens it, and it stays as chosen when the dock grows or shrinks.
+        window.simulate_click(crate::ui::spot_at("diff-files-toggle").unwrap().center(), gpui::MouseButton::Left);
+        window.draw();
+        window.read(|v, _| assert!(v.files_shown()));
+        // A wide dock shows it by itself.
+        let (_app, mut window) = open(json!({ "patch": patch }));
+        window.update(|v, _, cx| {
+            v.set_dock(true, true, cx);
+            v.set_width(760.0, cx);
+        });
+        window.read(|v, _| assert!(v.files_shown()));
+        // Filling a narrow window it starts in one column; a wide one side by side; a choice is kept.
+        let (_app, mut window) = open(json!({ "patch": patch }));
+        window.update(|v, _, cx| v.set_width(640.0, cx));
+        window.read(|v, _| assert!(!v.split()));
+        window.update(|v, _, cx| v.set_width(1000.0, cx));
+        window.read(|v, _| assert!(v.split()));
     }
 
     /// A reply comes back as `updateDiff` with the comments alone, or with the patch already shown on a live diff's next

@@ -95,7 +95,7 @@ impl Viewer {
             .flex_1()
             .min_h_0()
             .flex()
-            .when(!self.docked || self.dock_files, |body| {
+            .when(self.files_shown(), |body| {
                 body.child(
                     div()
                         .id("diff-file-panel")

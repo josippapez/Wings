@@ -46,10 +46,25 @@ impl Size {
 }
 
 impl Workspace {
+    /// Whether the project sidebar is docked in the layout: the user's choice, unless the window can't hold it with the
+    /// panes' 320 and the open right panel's 250, when it steps aside and its peek shows it, as when it is collapsed.
+    pub(super) fn docked(&self) -> bool {
+        self.sidebar && !self.aside
+    }
+
+    /// Works out `aside` for a window `viewport` wide, at the start of a draw.
+    pub(super) fn sync_aside(&mut self, viewport: Pixels) {
+        self.aside = self.sidebar
+            && !self.right.is_empty()
+            // A diff in the panel's place has its own room (`sidebar_diff_space`) and fills a window too narrow for it.
+            && self.plugin_ui.diff_dock.sidebar.is_none()
+            && viewport.as_f32() < self.side.width + MAIN_MIN + MIN_WIDTH;
+    }
+
     /// The widest the panel can be in a window `viewport` wide: the panes keep their 320 beside the docked project
     /// sidebar, but the panel never goes under its 250.
     fn right_room(&self, viewport: Pixels) -> f32 {
-        let left = if self.sidebar { self.side.width } else { 0.0 };
+        let left = if self.docked() { self.side.width } else { 0.0 };
         (viewport.as_f32() - left - MAIN_MIN).clamp(MIN_WIDTH, MAX_WIDTH)
     }
 
@@ -64,7 +79,7 @@ impl Workspace {
     /// How wide the main column is: the window less the docked project sidebar and the right panel, the room the project
     /// bar and the tab's panes share.
     pub(super) fn main_width(&self, viewport: Pixels) -> f32 {
-        let left = if self.sidebar { self.side.width } else { 0.0 };
+        let left = if self.docked() { self.side.width } else { 0.0 };
         let right = if self.right.is_empty() { 0.0 } else { self.right_width(viewport) };
         (viewport.as_f32() - left - right).max(0.0)
     }

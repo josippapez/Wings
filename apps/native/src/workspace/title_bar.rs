@@ -34,7 +34,7 @@ struct NewPage {
 
 impl Workspace {
     pub(super) fn title_bar(&self, tabs: Vec<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
-        let (sidebar, width) = (self.sidebar, self.side.width);
+        let (sidebar, width) = (self.docked(), self.side.width);
         let (back, forward) = (self.can_navigate(true), self.can_navigate(false));
         let (offset, max) = (self.tab_scroll.offset(), self.tab_scroll.max_offset());
         div()

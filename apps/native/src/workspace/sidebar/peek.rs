@@ -35,7 +35,7 @@ pub(super) struct Peek {
 impl Workspace {
     /// The strip at the edge, and the sidebar floating over the panes while it shows. Nothing while the sidebar is docked.
     pub(in crate::workspace) fn sidebar_peek(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if self.sidebar {
+        if self.docked() {
             return Vec::new();
         }
         let peek = &self.side.peek;

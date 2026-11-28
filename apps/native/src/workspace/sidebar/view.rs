@@ -46,7 +46,7 @@ impl Workspace {
     /// panes over, as the desktop does, while its contents fade, narrowing with it down to the narrowest sidebar and
     /// clipped below that, as the desktop's `min-w-[200px]` list; the terminals refit once the panes hold still.
     pub(in crate::workspace) fn sidebar_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.sidebar && !self.side.slide.running {
+        if !self.docked() && !self.side.slide.running {
             return None;
         }
         let width = self.side.width;

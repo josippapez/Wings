@@ -269,6 +269,9 @@ pub struct Workspace {
     /// Other projects' tabs, with their shells still running, while another project is shown.
     parked: HashMap<PathBuf, Parked>,
     sidebar: bool,
+    /// The window is too narrow for the docked sidebar, the panes' 320 and the right panel's 250: for the layout the
+    /// sidebar steps aside, as when collapsed, and its peek still shows it. Never saved: `sidebar` is the user's choice.
+    aside: bool,
     /// The sidebar's width, order, git counts and peek.
     side: sidebar::State,
     /// Layers and popovers that closed, drawn on their way out.
@@ -494,6 +497,7 @@ impl Workspace {
             tab_scroll: ScrollHandle::new(),
             tab_drags: Default::default(),
             tab_layout: None,
+            aside: false,
             active: Active::Issues,
             issues_open: true,
             config,
@@ -1123,7 +1127,9 @@ impl Render for Workspace {
         let place = self.place();
         self.nav.visit(place);
         self.close_diff_without_tab();
+        self.sync_aside(window.viewport_size().width);
         self.sync_diff_room(window.viewport_size().width, cx);
+        self.sync_diff_width(window.viewport_size().width, cx);
         if self.diff_shown() == Some(diff::Shown::Full)
             && let Some((viewer, _)) = &self.plugin_ui.diff
         {
@@ -1160,8 +1166,8 @@ impl Render for Workspace {
         }
         let tab_layout = (
             window.viewport_size().width,
-            self.sidebar,
-            self.sidebar.then_some(self.side.width),
+            self.docked(),
+            self.docked().then_some(self.side.width),
             !self.right.is_empty(),
             self.plugins
                 .iter()

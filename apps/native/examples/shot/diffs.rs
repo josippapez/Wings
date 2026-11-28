@@ -449,9 +449,12 @@ pub(super) fn diff_comments(cx: &mut VisualTestAppContext, base: &Config, out: &
         // At 640 there's no room to dock, so it already fills the window, with no file list toggle.
         let docks = width > 700.0;
         if docks {
+            // The dock is narrow, so it starts without the file list: opened by hand, then shut again for the reply.
             click(cx, window, spot("diff-files-toggle"));
             wait(cx, window, Duration::from_millis(300));
-            save(cx, window, &name("docked-no-files"));
+            save(cx, window, &name("docked-files"));
+            click(cx, window, spot("diff-files-toggle"));
+            wait(cx, window, Duration::from_millis(300));
         }
         // A reply being written, which the plugin refuses.
         click(cx, window, spot("diff-reply-1"));

@@ -370,7 +370,7 @@ impl Workspace {
     /// The open list, beside the sidebar at the Inbox row's height.
     pub(super) fn inbox_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let fresh = self.inbox.open.as_ref()?;
-        let left = if self.sidebar {
+        let left = if self.docked() {
             self.side.width + 8.0
         } else {
             8.0

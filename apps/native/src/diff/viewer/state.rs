@@ -1,6 +1,16 @@
 //! A viewer's start and its layout choices: wrap, tree, split, dock and the file list.
 use super::*;
 
+/// The file list's width docked, and when the diff fills the window.
+const DOCK_LIST: f32 = 224.0;
+const FULL_LIST: f32 = 288.0;
+/// A docked diff leaves its file list out below this much room for the code beside it.
+const CODE_ROOM: f32 = 480.0;
+/// Below this much code column, a comment card spans it without the indent past the line numbers.
+const CARD_ROOM: f32 = 560.0;
+/// Filling the window, narrower than this it starts in one column, not side by side.
+const SPLIT_ROOM: f32 = 760.0;
+
 impl Viewer {
     pub fn new(view: View, host: Arc<PluginHost>, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| {
@@ -34,6 +44,8 @@ impl Viewer {
             can_dock: false,
             back: false,
             dock_files: true,
+            files_touched: false,
+            width: 0.0,
             wrap: false,
             tree: false,
             collapsed: HashSet::new(),
@@ -101,7 +113,7 @@ impl Viewer {
     /// Side by side until you pick, except docked: a dock is usually too narrow for two columns, as the desktop's
     /// `splitChoice ?? !dock`.
     pub fn split(&self) -> bool {
-        self.split_choice.unwrap_or(!self.docked)
+        self.split_choice.unwrap_or(!self.docked && !self.narrow_window())
     }
 
     /// Beside its tab (`docked`), or filling the window, where `can_dock` offers to go back beside the tab.
@@ -127,7 +139,43 @@ impl Viewer {
         cx.notify();
     }
 
+    /// How wide the app draws the viewer. Redraws only when that changes what it shows.
+    pub fn set_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let (split, before) = (self.split(), (self.files_shown(), self.narrow_column()));
+        self.width = width;
+        if self.split() != split {
+            self.rebuild(cx);
+        }
+        if before != (self.files_shown(), self.narrow_column()) {
+            cx.notify();
+        }
+    }
+
+    /// Filling a window too narrow for two columns beside the 288 file list: one column until you pick.
+    fn narrow_window(&self) -> bool {
+        self.width != 0.0 && self.width < SPLIT_ROOM
+    }
+
+    /// The file list is drawn: always when the diff fills the window, and docked as last chosen, unless the dock is too
+    /// narrow to leave the code room and the list wasn't opened by hand.
+    pub(super) fn files_shown(&self) -> bool {
+        if !self.docked {
+            return true;
+        }
+        self.dock_files && (self.files_touched || self.width == 0.0 || self.width - DOCK_LIST >= CODE_ROOM)
+    }
+
+    /// The code column is too narrow for a comment card to be indented past the line numbers.
+    pub(super) fn narrow_column(&self) -> bool {
+        if self.width == 0.0 {
+            return false;
+        }
+        let list = if self.files_shown() { if self.docked { DOCK_LIST } else { FULL_LIST } } else { 0.0 };
+        self.width - list < CARD_ROOM
+    }
+
     pub(super) fn choose_dock_files(&mut self, shown: bool, cx: &mut Context<Self>) {
+        self.files_touched = true;
         self.set_dock_files(shown, cx);
         cx.emit(Event::DockFiles(shown));
     }

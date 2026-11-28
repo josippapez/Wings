@@ -69,13 +69,20 @@ impl Viewer {
             .into_any_element()
     }
 
+    /// The comments the Discussion row counts: those on the whole change. Those on code that changed since are in the
+    /// discussion too, but their file's row counts them, so each comment is counted once, as the header does.
+    pub(super) fn discussion_count(&self) -> usize {
+        let comments = self.comments();
+        self.discussion
+            .iter()
+            .filter(|&&t| comments[self.threads[t].root].path.is_none())
+            .map(|&t| 1 + self.threads[t].replies.len())
+            .sum()
+    }
+
     /// The file list's first row when there are comments with no line to sit on: it opens them in place of a file.
     pub(super) fn discussion_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let count: usize = self
-            .discussion
-            .iter()
-            .map(|&t| 1 + self.threads[t].replies.len())
-            .sum();
+        let count = self.discussion_count();
         let open = self.discussion_open;
         div()
             .flex_none()
@@ -140,7 +147,9 @@ impl Viewer {
             .id(SharedString::from(format!("diff-thread-{id}")))
             .children(ui::spot(|| format!("diff-thread-{id}")))
             .when(inline, |card| {
-                card.mt(px(6.0)).mb(px(6.0)).mr(px(12.0)).ml(px(48.0))
+                // Indented past the line numbers, unless the column is narrow: then it spans the width.
+                let indent = if self.narrow_column() { 12.0 } else { 48.0 };
+                card.mt(px(6.0)).mb(px(6.0)).mr(px(12.0)).ml(px(indent))
             })
             .max_w(px(768.0))
             .flex()

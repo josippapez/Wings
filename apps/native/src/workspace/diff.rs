@@ -206,6 +206,19 @@ impl Workspace {
         cx.notify_workspace();
     }
 
+    /// Tells the viewer how wide it is drawn, so a narrow one leaves its file list out and its comment cards span it.
+    pub(super) fn sync_diff_width(&mut self, viewport: Pixels, cx: &mut Context<Self>) {
+        let width = match self.diff_shown() {
+            Some(Shown::Docked) => self.diff_width(viewport),
+            Some(Shown::Sidebar) => self.right_width(viewport),
+            Some(Shown::Full) => viewport.as_f32(),
+            None => return,
+        };
+        if let Some((viewer, _)) = &self.plugin_ui.diff {
+            viewer.update(cx, |viewer, cx| viewer.set_width(width, cx));
+        }
+    }
+
     /// Notes whether a window `viewport` wide has room for the dock, and tells the viewer when that changes, so it
     /// draws itself filling the window, with no button to dock.
     pub(super) fn sync_diff_room(&mut self, viewport: Pixels, cx: &mut Context<Self>) {
@@ -274,7 +287,7 @@ impl Workspace {
 
     /// The width beside the sidebars and the tab's 320.
     fn diff_space(&self, viewport: Pixels) -> f32 {
-        let left = if self.sidebar { self.side.width } else { 0.0 };
+        let left = if self.docked() { self.side.width } else { 0.0 };
         let right = if !self.right.is_empty() {
             self.right_width(viewport)
         } else {
@@ -296,7 +309,7 @@ impl Workspace {
 
     /// The width over the panes of a diff in a sidebar's place: all but the project sidebar and a sliver of the panes.
     fn sidebar_diff_space(&self, viewport: Pixels) -> f32 {
-        let left = if self.sidebar { self.side.width } else { 0.0 };
+        let left = if self.docked() { self.side.width } else { 0.0 };
         viewport.as_f32() - left - SLIVER
     }
 
