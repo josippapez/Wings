@@ -405,10 +405,10 @@ fn changes_body(c: &Changes, mode: Mode, collapsed: &BTreeSet<String>) -> Vec<No
     if c.files.is_empty() {
         return vec![empty(if mode == Mode::Branch { "Nothing changed on this branch." } else { "No uncommitted changes." }, &c.against)];
     }
-    let summary = text(format!("{} ", plural(c.files.len(), "file")))
-        .child(text(format!("+{}", c.added)).prop("tone", "success").prop("numeric", true))
-        .text(" ")
-        .child(text(format!("−{}", c.removed)).prop("tone", "danger").prop("numeric", true))
+    let total = |n: u64, sign: char, tone: &str| (n > 0).then(|| text(format!(" {sign}{n}")).prop("tone", tone).prop("numeric", true));
+    let summary = text(plural(c.files.len(), "file"))
+        .maybe(total(c.added, '+', "success"))
+        .maybe(total(c.removed, '−', "danger"))
         .maybe(c.partial.then(|| muted(" (some new files not counted)")));
     let root = c.root.clone();
     let all = button("View all", "secondary", false, move || ask(OPEN, json!({ "root": root, "mode": mode.name(), "path": null }))).prop("size", "sm");
@@ -430,12 +430,15 @@ fn changes_body(c: &Changes, mode: Mode, collapsed: &BTreeSet<String>) -> Vec<No
     vec![
         // The totals over what they're against, with no card around them, as Orca's git panel has its branch: a card and a
         // large button took a narrow sidebar's room from the files.
-        row()
-            .key("summary")
-            .prop("align", "center")
-            .child(stack().prop("gap", "none").prop("grow", true).child(summary).child(muted(c.against.clone()).prop("size", "small").prop("truncate", true)))
-            .child(all),
-        list().key("tree").children(rows),
+        // The summary is the list's first row, so "View all" ends where the rows' stats do.
+        list().key("tree").child(list_row(
+            "summary",
+            row()
+                .prop("align", "center")
+                .prop("grow", true)
+                .child(stack().prop("gap", "none").prop("grow", true).child(summary).child(muted(c.against.clone()).prop("size", "small").prop("truncate", true)))
+                .child(all),
+        )).children(rows),
     ]
 }
 
@@ -653,6 +656,16 @@ mod tests {
         assert!(button.contains(r#""variant":"secondary""#) && button.contains(r#""size":"sm""#) && !button.contains("ghost"), "{tree}");
     }
 
+    #[test]
+    fn a_total_of_zero_is_not_shown() {
+        let c = crate::changes::Changes { added: 3, removed: 0, ..big(1, 1) };
+        let tree = wings_plugin::ui::tree_json(super::changes_body(&c, crate::changes::Mode::Branch, &Default::default()).remove(0)).to_string();
+        assert!(tree.contains("+3") && !tree.contains("−0"), "{tree}");
+        let c = crate::changes::Changes { added: 0, removed: 2, ..c };
+        let tree = wings_plugin::ui::tree_json(super::changes_body(&c, crate::changes::Mode::Branch, &Default::default()).remove(0)).to_string();
+        assert!(tree.contains("−2") && !tree.contains("+0"), "{tree}");
+    }
+
     fn big(count: usize, dirs: usize) -> crate::changes::Changes {
         let files = (0..count)
             .map(|i| crate::changes::FileChange {
@@ -688,12 +701,12 @@ mod tests {
             let json: usize = nodes.into_iter().map(|node| wings_plugin::ui::tree_json(node).to_string().len()).sum();
             eprintln!("dirs {dirs}: {json} bytes for the sidebar body");
             assert!(json < 400_000, "{json}");
-            let tree = wings_plugin::ui::tree_json(super::changes_body(&c, crate::changes::Mode::Branch, &Default::default()).remove(1)).to_string();
+            let tree = wings_plugin::ui::tree_json(super::changes_body(&c, crate::changes::Mode::Branch, &Default::default()).remove(0)).to_string();
             assert!(tree.contains("of 5,000 files"), "{}", &tree[tree.len().saturating_sub(600)..]);
         }
         // Under the cap there is no such row.
-        let small = wings_plugin::ui::tree_json(super::changes_body(&big(50, 1), crate::changes::Mode::Branch, &Default::default()).remove(1)).to_string();
-        assert!(!small.contains("files\""), "{small}");
+        let small = wings_plugin::ui::tree_json(super::changes_body(&big(50, 1), crate::changes::Mode::Branch, &Default::default()).remove(0)).to_string();
+        assert!(!small.contains("of 50 files"), "{small}");
         assert!(!small.contains("Showing"), "{small}");
     }
 

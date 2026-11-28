@@ -3,13 +3,13 @@
 //! rows it shows, so only those cross over.
 
 use crate::{
-    dates::date_of,
     layout::{Placed, layout},
     log::{LOG, parse_log},
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use wings_plugin::{
+    format::ago_now,
     git::raw,
     ui::{Graph, Node, empty, graph, notice},
 };
@@ -82,7 +82,7 @@ fn rows_json(log: &Log) -> (usize, Vec<Value>) {
         .iter()
         .map(|placed| {
             let c = &placed.commit;
-            json!({ "hash": c.hash, "subject": c.subject, "author": c.author, "date": date_of(c.at), "refs": c.refs, "lane": placed.lane, "color": placed.color, "merge": c.parents.len() > 1, "lines": placed.lines })
+            json!({ "hash": c.hash, "subject": c.subject, "author": c.author, "date": ago_now(c.at * 1000.0), "refs": c.refs, "lane": placed.lane, "color": placed.color, "merge": c.parents.len() > 1, "lines": placed.lines })
         })
         .collect();
     (offset, rows)
@@ -130,6 +130,8 @@ mod tests {
         assert_eq!(offset, 1);
         assert_eq!(rows.iter().map(|row| row["subject"].as_str().unwrap()).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!((rows[0]["refs"][0].as_str(), rows[0]["lane"].as_u64(), rows[0]["merge"].as_bool()), (Some("H:main"), Some(0), Some(false)));
+        // The date reads as History's does, relative to now (the tests' clock stands at 0), not as an ISO day.
+        assert_eq!(rows[0]["date"], "just now");
         assert_eq!(rows_json(&loaded((0, 64))).1.len(), 4);
         // A window past the end shows nothing, not a panic.
         assert!(rows_json(&loaded((10, 20))).1.is_empty());
