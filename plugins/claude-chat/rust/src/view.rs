@@ -177,6 +177,7 @@ pub(crate) fn chat_page(c: &Chat) -> Node {
         .maybe(crate::pictures_view::dialog_of(c))
         .maybe(crate::status_view::dialog(c))
         .maybe(crate::screens::model_dialog(c))
+        .maybe(crate::help_view::dialog(c))
         .maybe(crate::pull_view::dialog(c))
         .maybe(crate::mods_view::menu(c));
     let page = Node::new("Page").prop("flush", true).on_text_scale(crate::prefs::step_text_size);
@@ -1989,11 +1990,15 @@ fn suggestions(c: &Chat) -> Option<Node> {
             })
             .collect()
     } else if !commands.is_empty() {
+        // A command with other names shows them as Claude Code's menu does, `/clear (reset, new)`, and one that runs only in
+        // a terminal says so: picking it says it again in the conversation.
         commands
             .into_iter()
             .map(|command| {
                 let name = command.name.clone();
-                option(&command.name, format!("/{}", command.name), &command.description, Box::new(move || chat::insert_command(&name)))
+                let label = if command.aliases.is_empty() { format!("/{}", command.name) } else { format!("/{} ({})", command.name, command.aliases.join(", ")) };
+                let detail = if command.terminal { format!("Terminal only · {}", command.description) } else { command.description.clone() };
+                option(&command.name, label, &detail, Box::new(move || chat::insert_command(&name)))
             })
             .collect()
     } else if !files.is_empty() || !terminals.is_empty() {

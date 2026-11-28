@@ -51,13 +51,9 @@ pub fn opening(how: &Launch, prompts: &[Prompt]) -> String {
     }
 }
 
-/// The path `/add-dir <path>` names, empty when none follows. None for any other text, `/add-dirs` included.
-pub fn add_dir_command(text: &str) -> Option<&str> {
-    let rest = text.trim().strip_prefix("/add-dir")?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    Some(rest.trim().trim_matches(|c: char| c == '"' || c == '\'').trim())
+/// The path what follows `/add-dir` names, without the quotes around a path with spaces in it.
+pub fn unquoted(path: &str) -> &str {
+    path.trim().trim_matches(|c: char| c == '"' || c == '\'').trim()
 }
 
 /// The folder as Claude Code is given it: a full path as it is, anything else from the chat's folder.
@@ -139,12 +135,10 @@ mod tests {
     }
 
     #[test]
-    fn add_dir_is_the_command_and_its_path() {
-        assert_eq!(add_dir_command("/add-dir /work/docs"), Some("/work/docs"));
-        assert_eq!(add_dir_command("  /add-dir   \"/work/my docs\"  "), Some("/work/my docs"));
-        assert_eq!(add_dir_command("/add-dir"), Some(""));
-        assert_eq!(add_dir_command("/add-dirs /work"), None);
-        assert_eq!(add_dir_command("please /add-dir /work"), None);
+    fn add_dir_takes_its_path_without_quotes() {
+        assert_eq!(unquoted("/work/docs"), "/work/docs");
+        assert_eq!(unquoted("  \"/work/my docs\"  "), "/work/my docs");
+        assert_eq!(unquoted(""), "");
     }
 
     #[test]

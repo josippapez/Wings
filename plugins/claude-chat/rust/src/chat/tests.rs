@@ -118,7 +118,7 @@ fn picking_a_built_in_from_the_slash_list_opens_it_and_any_other_command_is_fill
 }
 
 fn command(name: &str) -> Command {
-    Command { name: name.into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }
+    Command { name: name.into(), ..Command::default() }
 }
 
 fn mid_names() -> Vec<String> {
@@ -162,7 +162,7 @@ fn tab_on_a_bare_slash_lists_every_command_and_inserting_only_writes_the_text() 
     with_commands("then /");
     super::tab();
     assert_eq!(with(|c| c.draft.clone()), "then /");
-    assert_eq!(mid_names().len(), 3 + commands::own_commands(&with(|c| c.session.commands.clone())).count());
+    assert_eq!(mid_names().len(), commands::runnable(&with(|c| c.session.commands.clone())).count().min(40));
     super::insert_mid_command("commit");
     assert_eq!(with(|c| c.draft.clone()), "then /commit ");
     assert!(with(|c| c.plugins.is_none() && c.panel.is_none()));
@@ -612,10 +612,113 @@ fn a_bare_slash_command_opens_the_chats_screen_and_sends_nothing() {
     let shown = with(|c| wings_plugin::ui::tree_json(crate::screens::model_dialog(c).unwrap()).to_string());
     assert!(shown.contains("Model and effort"));
     with(|c| (c.model_dialog, c.fork_ask, c.session.cmds.copy) = (false, false, None));
-    // With words after it, a command is a message.
+    // With words after it, a command Claude Code lists goes to it: it takes a model's name in -p.
+    with(|c| c.session.commands = vec![Command { name: "model".into(), builtin: true, ..Command::default() }]);
     with(|c| c.draft = "/model opus".into());
     send();
     wings_plugin::task::block_on(async {});
     assert_eq!(writes(), 1);
     assert!(!with(|c| c.model_dialog));
+}
+
+/// Records what the chat asks Wings, with Claude Code running and idle.
+fn recording() -> Rc<RefCell<Vec<(String, Value)>>> {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let kept = calls.clone();
+    host::testing::answer(move |method, params| {
+        kept.borrow_mut().push((method.to_owned(), params.clone()));
+        Ok(Value::Null)
+    });
+    running(false);
+    let process = host::spawn("claude", &[], "/work/shop", "", |_| {});
+    with(|c| {
+        c.input = Some(process.input());
+        c.session.items.clear();
+        c.session.commands.clear();
+        c.help = None;
+    });
+    calls
+}
+
+fn written(calls: &Rc<RefCell<Vec<(String, Value)>>>) -> Vec<String> {
+    wings_plugin::task::block_on(async {});
+    asked(calls, "processWrite").iter().map(|params| params["text"].as_str().unwrap_or_default().to_owned()).collect()
+}
+
+/// `claude -p` answers `/theme` with "/theme isn't available in this environment.": the chat says where it runs instead,
+/// typed or picked from the menu, and Claude Code hears nothing.
+#[test]
+fn a_command_only_claude_codes_terminal_runs_gets_a_note_and_is_not_sent() {
+    let calls = recording();
+    with(|c| c.draft = "/theme".into());
+    super::send();
+    super::insert_command("ios");
+    assert!(written(&calls).is_empty());
+    with(|c| {
+        assert!(c.draft.is_empty());
+        let notes: Vec<&crate::session::Item> = c.session.items.iter().collect();
+        assert_eq!(notes, [&crate::session::Item::Notice("/theme runs only in Claude Code in a terminal".into()), &crate::session::Item::Notice("/mobile runs only in Claude Code in a terminal".into())]);
+    });
+    // One the chat has typed with what it doesn't take says how it is typed.
+    with(|c| c.draft = "/tasks now".into());
+    super::send();
+    assert!(written(&calls).is_empty());
+    assert!(with(|c| c.session.items.last() == Some(&crate::session::Item::Notice("Type /tasks alone, with nothing after it".into()))));
+}
+
+/// `/help` opens the list of every command, and its key is when the chat asks Claude Code to look for skills on disk again.
+#[test]
+fn help_lists_every_command_and_asks_claude_code_for_its_skills_again() {
+    let calls = recording();
+    with(|c| c.draft = "/help mod".into());
+    super::send();
+    let writes = written(&calls);
+    assert_eq!(writes.len(), 1);
+    let asked: Value = serde_json::from_str(writes[0].trim()).unwrap();
+    assert_eq!((asked["request_id"].as_str(), asked["request"].clone()), (Some(super::RELOAD_SKILLS), json!({ "subtype": "reload_skills" })));
+    with(|c| assert_eq!((c.help.as_deref(), c.draft.as_str()), (Some("mod"), "")));
+    // The skill Claude Code then finds is in the menu.
+    with(|c| c.session.hear(&json!({ "type": "system", "subtype": "commands_changed", "commands": [{ "name": "deploy-preview", "description": "Deploy a preview", "argumentHint": "" }] })));
+    typed("/dep");
+    assert_eq!(with(|c| super::command_matches(c).first().map(|command| command.name.clone())), Some("deploy-preview".into()));
+    with(|c| c.help = None);
+}
+
+/// Claude Code sends a `/word` it doesn't know to Claude as text, and so does the chat.
+#[test]
+fn a_slash_word_no_one_knows_is_sent_as_a_message() {
+    let calls = recording();
+    with(|c| c.draft = "/frobnicate the cache".into());
+    super::send();
+    let writes = written(&calls);
+    let message: Value = serde_json::from_str(writes[0].lines().next().unwrap()).unwrap();
+    assert_eq!((message["type"].as_str(), message["message"]["content"].as_str()), (Some("user"), Some("/frobnicate the cache")));
+    assert!(with(|c| c.session.items.iter().all(|item| !matches!(item, crate::session::Item::Notice(_)))));
+}
+
+/// Claude Code lists `/clear` with the aliases `/reset` and `/new`, which it runs: the menu finds `/clear` by them, and
+/// the chat sends them on.
+#[test]
+fn an_alias_of_a_listed_command_completes_and_is_sent() {
+    let calls = recording();
+    with(|c| c.session.commands = crate::session::commands(&json!([{ "name": "clear", "description": "Start a new session", "argumentHint": "", "aliases": ["reset", "new"], "builtin": true }])));
+    typed("/rese");
+    assert_eq!(with(|c| super::command_matches(c).first().map(|command| (command.name.clone(), command.aliases.clone()))), Some(("clear".into(), vec!["reset".into(), "new".into()])));
+    with(|c| c.draft = "/reset".into());
+    super::send();
+    assert!(written(&calls)[0].contains("\"content\":\"/reset\""));
+}
+
+/// With Claude Code stopped, `/help` still lists the commands, and Escape closes it rather than doing anything else.
+#[test]
+fn help_opens_without_claude_code_and_escape_closes_it() {
+    let calls = recording();
+    with(|c| (c.input, c.draft) = (None, "/help".into()));
+    super::send();
+    assert!(written(&calls).is_empty());
+    assert_eq!(with(|c| c.help.clone()), Some(String::new()));
+    with(|c| c.session.working = true);
+    super::escape();
+    assert!(with(|c| c.help.is_none() && c.session.working));
+    with(|c| c.session.working = false);
 }

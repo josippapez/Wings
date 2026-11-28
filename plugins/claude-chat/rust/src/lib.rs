@@ -26,6 +26,8 @@ mod branch;
 #[cfg(feature = "chat")]
 mod chat;
 #[cfg(feature = "chat")]
+mod help_view;
+#[cfg(feature = "chat")]
 mod screens;
 #[cfg(any(feature = "chat", test))]
 mod code_view;
@@ -139,6 +141,7 @@ mod subagent_view;
 mod subagents;
 #[cfg(feature = "chat")]
 mod terminals;
+mod terminal_commands;
 #[cfg(feature = "chat")]
 mod tasks_view;
 #[cfg(feature = "chat")]

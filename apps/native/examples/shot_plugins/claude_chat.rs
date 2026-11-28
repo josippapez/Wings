@@ -205,6 +205,9 @@ esac"##,
         lines.splice(1..1, ready.iter().cloned());
         lines
     };
+    // What Claude Code sends when a skill appears on disk mid-session: its whole list again, with the new one.
+    let mut skill_added = json!({ "type": "system", "subtype": "commands_changed", "commands": ready[0]["response"]["response"]["commands"].clone() });
+    skill_added["commands"].as_array_mut().unwrap().push(json!({ "name": "deploy-preview", "description": "Deploy this branch to a preview URL and post the link", "argumentHint": "[branch]" }));
     let fix = json!({ "file_path": "/work/shop/src/checkout.ts",
         "old_string": "  return total * (1 - rate);",
         "new_string": "  const cents = Math.round(total * 100);\n  return Math.round(cents * (1 - rate)) / 100;" });
@@ -1127,6 +1130,16 @@ esac"##,
         ("slash", opened(vec![init.clone()]), None, Some("type:/re;keys:down"), "/review"),
         // `/` after a space completes a command partway through a message too, with no row picked until the arrows pick one.
         ("slash-mid", opened(vec![init.clone()]), None, Some("type:check the diff, then /re"), "/review"),
+        // A skill added on disk while the chat runs: Claude Code sends its whole list again, and the menu has it.
+        ("slash-added", opened(vec![init.clone(), skill_added.clone()]), None, Some("type:/dep"), "deploy-preview"),
+        // Claude Code's commands that run only in its terminal are offered too, marked, by their name or an alias.
+        ("slash-terminal", opened(vec![init.clone()]), None, Some("type:/th"), "Terminal only"),
+        // Sent, one says where it runs instead, and Claude Code hears nothing.
+        ("terminal-note", opened(vec![init.clone()]), None, Some("type:/theme;keys:enter"), "runs only in Claude Code in a terminal"),
+        // /help lists every command: the ones that run here, then the terminal's.
+        ("help", opened(vec![init.clone(), skill_added]), None, Some("type:/help;keys:enter"), "In this chat"),
+        // What follows /help finds the commands it names, here one that runs only in Claude Code's terminal.
+        ("help-search", opened(vec![init.clone()]), None, Some("type:/help theme;keys:enter"), "Only in Claude Code in a terminal"),
         // /usage opens the usage dialog over the conversation instead of going to Claude as a message, and so does /context.
         ("usage", work.iter().cloned().chain([full_usage.clone()]).collect(), None, Some("type:/usage;keys:enter"), "Plan usage limits"),
         ("usage-end", work.iter().cloned().chain([full_usage]).collect(), None, Some("type:/usage;keys:enter;scroll:down"), "Cache read tokens"),

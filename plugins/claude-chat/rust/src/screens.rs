@@ -1,7 +1,6 @@
 //! The bare slash commands that open one of the chat's own screens, as VS Code's do, instead of going to Claude Code
 //! headless, where `/model` and the rest print a line nobody sees: `/model` and `/effort` (the model dialog), `/rewind`,
-//! `/resume`, `/fork`, `/tasks`, `/workflows`, `/bookmarks` and `/copy [N]`. With words after the name they go on to Claude
-//! Code as before, apart from `/copy`, whose one argument is the number of the reply.
+//! `/resume`, `/fork` and `/branch`, `/tasks`, `/workflows`, `/bookmarks` and `/copy [N]`, as `builtin::TABLE` names them.
 //!
 //! Wings lets a page copy only on a click, so `/copy` opens a dialog with the reply and a Copy button, as `/export` does.
 
@@ -10,7 +9,9 @@ use wings_plugin::{
     ui::{Node, button, chip, chips, dialog as panel, loading, muted, row, stack, text},
 };
 
+pub use crate::builtin::Screen;
 use crate::{
+    builtin::{Found, Local},
     chat::{self, Chat, State},
     session::{Command, Item},
 };
@@ -19,45 +20,10 @@ const WIDTH: u32 = 560;
 /// The lines of the reply the dialog previews.
 const PREVIEW: usize = 12;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Screen {
-    /// The model and effort pickers, in a dialog.
-    Model,
-    /// The rewind dialog, for your latest message.
-    Rewind,
-    /// Wings' Past sessions.
-    Resume,
-    /// The header's Fork.
-    Fork,
-    /// The side panel's group of this name.
-    Panel(&'static str),
-    /// The dialog that copies the `n`th latest reply, the latest being 1.
-    Copy(usize),
-}
-
 /// What a draft opens, when it is exactly one of these commands and no plugin or skill of Claude Code's took the name.
 pub fn find(text: &str, listed: &[Command]) -> Option<Screen> {
-    let rest = text.trim().strip_prefix('/')?;
-    let mut words = rest.split_whitespace();
-    let name = words.next()?;
-    let (arg, extra) = (words.next(), words.next());
-    if listed.iter().any(|command| command.name == name && !command.builtin) || extra.is_some() {
-        return None;
-    }
-    let bare = arg.is_none();
-    match name {
-        "copy" => match arg {
-            None => Some(Screen::Copy(1)),
-            Some(n) => n.parse().ok().filter(|n| *n >= 1).map(Screen::Copy),
-        },
-        _ if !bare => None,
-        "model" | "effort" => Some(Screen::Model),
-        "rewind" | "checkpoint" => Some(Screen::Rewind),
-        "resume" | "continue" => Some(Screen::Resume),
-        "fork" => Some(Screen::Fork),
-        "tasks" | "bashes" => Some(Screen::Panel("tasks")),
-        "workflows" => Some(Screen::Panel("workflows")),
-        "bookmarks" => Some(Screen::Panel("bookmarks")),
+    match crate::builtin::recognize(text, listed)? {
+        Found::Own(Local::Screen(screen), _) => Some(screen),
         _ => None,
     }
 }
@@ -174,7 +140,7 @@ mod tests {
     use super::*;
 
     fn listed(names: &[(&str, bool)]) -> Vec<Command> {
-        names.iter().map(|(name, builtin)| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: *builtin }).collect()
+        names.iter().map(|(name, builtin)| Command { name: (*name).into(), builtin: *builtin, ..Command::default() }).collect()
     }
 
     #[test]
@@ -185,6 +151,9 @@ mod tests {
             ("/rewind", Screen::Rewind),
             ("/resume", Screen::Resume),
             ("/fork", Screen::Fork),
+            ("/branch", Screen::Fork),
+            ("/continue", Screen::Resume),
+            ("/bashes", Screen::Panel("tasks")),
             ("/tasks", Screen::Panel("tasks")),
             ("/workflows", Screen::Panel("workflows")),
             ("/bookmarks", Screen::Panel("bookmarks")),
@@ -198,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn a_command_with_arguments_a_plugins_namesake_or_another_command_goes_to_claude_code() {
+    fn a_command_with_arguments_a_plugins_namesake_or_another_command_opens_no_screen() {
         for typed in ["/model opus", "/effort high", "/resume abc", "/fork name", "/tasks now", "/copy 0", "/copy two", "/copy 1 2", "/rewinds", "model", "see /model"] {
             assert_eq!(find(typed, &[]), None, "{typed}");
         }
@@ -210,8 +179,8 @@ mod tests {
     #[test]
     fn the_slash_menu_offers_every_screen_command_once() {
         let claude_codes = listed(&[("model", true), ("effort", true)]);
-        let ours: Vec<String> = crate::builtin::screen_menu(&claude_codes).map(|command| command.name).collect();
-        assert_eq!(ours, ["rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
+        let ours: Vec<String> = crate::builtin::all(&claude_codes).into_iter().map(|command| command.name).filter(|name| ["model", "effort", "rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"].contains(&name.as_str())).collect();
+        assert_eq!(ours, ["model", "effort", "rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
         for typed in ["rew", "res", "fo", "tas", "work", "cop", "book"] {
             let names: Vec<String> = crate::commands::menu(&claude_codes, typed).into_iter().map(|command| command.name).collect();
             assert!(names.iter().any(|name| name.starts_with(typed)), "/{typed} offers nothing: {names:?}");

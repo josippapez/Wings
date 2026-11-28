@@ -20,17 +20,6 @@ pub enum Remote {
     Disconnecting(String),
 }
 
-/// `/remote-control` or `/rc`, with the name it may give the session: None for anything else.
-pub fn command(text: &str) -> Option<Option<&str>> {
-    let text = text.trim();
-    let rest = text.strip_prefix("/remote-control").or_else(|| text.strip_prefix("/rc"))?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    let name = rest.trim();
-    Some((!name.is_empty()).then_some(name))
-}
-
 /// The line that turns it on, under `name` when given, else the chat's own title on claude.ai.
 pub fn connect(remote: &mut Remote, name: Option<&str>) -> String {
     *remote = Remote::Connecting;
@@ -77,15 +66,6 @@ mod tests {
 
     fn success(response: Value) -> Value {
         json!({ "subtype": "success", "request_id": REQUEST, "response": response })
-    }
-
-    #[test]
-    fn the_command_names_the_session_or_leaves_it_to_claude_code() {
-        assert_eq!(command("/remote-control"), Some(None));
-        assert_eq!(command(" /rc  Shop checkout \n"), Some(Some("Shop checkout")));
-        assert_eq!(command("/rcx"), None);
-        assert_eq!(command("/remote-controls"), None);
-        assert_eq!(command("rc"), None);
     }
 
     #[test]

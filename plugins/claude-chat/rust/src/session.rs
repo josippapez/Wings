@@ -432,15 +432,26 @@ pub struct Model {
 }
 
 /// A slash command, as `initialize` lists it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Command {
     pub name: String,
     pub description: String,
     pub hint: String,
+    /// The other names it answers to, like `/reset` and `/new` for `/clear`.
+    pub aliases: Vec<String>,
     /// Whether a plugin of Claude Code's gives it. Claude Code holds such a command until the turn ends.
     pub plugin: bool,
     /// One of Claude Code's own, which it lists from 2.1.330 on (`"builtin": true`), not a plugin's or a skill's.
     pub builtin: bool,
+    /// One Claude Code runs only in its terminal, which the slash menu offers with a note (`builtin.rs`): never one it lists.
+    pub terminal: bool,
+}
+
+impl Command {
+    /// Whether `/name` runs it, by its name or one of its aliases.
+    pub fn answers(&self, name: &str) -> bool {
+        self.name == name || self.aliases.iter().any(|alias| alias == name)
+    }
 }
 
 /// The permission modes Claude Code runs in, as `set_permission_mode` takes them, with what the chat calls them.
@@ -1513,7 +1524,7 @@ impl Session {
     /// key), which Claude Code holds until the turn ends, whatever the priority it was sent with.
     pub fn runs_after_turn(&self, text: &str) -> bool {
         let name = text.trim_start().strip_prefix('/').and_then(|rest| rest.split_whitespace().next());
-        name.is_some_and(|name| self.commands.iter().any(|command| command.plugin && command.name == name))
+        name.is_some_and(|name| self.commands.iter().any(|command| command.plugin && command.answers(name)))
     }
 
     /// The line that sends `text` while Claude works, and the message queued until Claude reads it. It goes in at
@@ -1936,11 +1947,6 @@ pub(crate) fn cancel(uuid: &str, n: u32) -> String {
     request(&format!("cancel-{n}"), json!({ "subtype": "cancel_async_message", "message_uuid": uuid }))
 }
 
-/// Whether a draft is `/exit`, which closes the chat.
-pub fn exits(text: &str) -> bool {
-    text.trim() == "/exit"
-}
-
 /// A uuid (version 4 in shape, which the protocol wants) made from the time in milliseconds and a number.
 fn uuid(stamp: u64, n: u32) -> String {
     format!("{:08x}-{:04x}-4000-8000-{:012x}", (stamp >> 16) as u32, stamp & 0xffff, n)
@@ -1962,7 +1968,15 @@ pub(crate) fn commands(list: &Value) -> Vec<Command> {
     list.as_array()
         .into_iter()
         .flatten()
-        .map(|command| Command { name: text(command, "name"), description: text(command, "description"), hint: text(command, "argumentHint"), plugin: is_plugin(command), builtin: command["builtin"] == true })
+        .map(|command| Command {
+            name: text(command, "name"),
+            description: text(command, "description"),
+            hint: text(command, "argumentHint"),
+            aliases: command["aliases"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect(),
+            plugin: is_plugin(command),
+            builtin: command["builtin"] == true,
+            terminal: false,
+        })
         .collect()
 }
 

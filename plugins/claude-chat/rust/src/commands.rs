@@ -1,11 +1,15 @@
 //! The slash commands the chat answers itself with a control request to Claude Code instead of sending them as a message:
-//! `/status` (`get_status`), `/export` (`export_conversation`), `/btw <question>` (`side_question`) and `/plan <task>`
-//! (`set_permission_mode` to plan, then the task). Each goes from the Enter that typed it, and what comes back is shown in
-//! a dialog (`status_view.rs`), never added to the conversation.
+//! `/status` (`get_status`), `/export` (`export_conversation`), `/btw <question>` (`side_question`) and `/plan [task]`
+//! (`set_permission_mode` to plan, then the task if there is one). Each goes from the Enter that typed it, and what comes
+//! back is shown in a dialog (`status_view.rs`), never added to the conversation. And the slash menu, which lists every
+//! command `builtin::all` knows.
 
 use serde_json::{Value, json};
 
-use crate::session::{Command, Session, request};
+use crate::{
+    builtin::{Found, Local},
+    session::{Command, Session, request},
+};
 
 pub const STATUS: &str = "status-dialog";
 pub const EXPORT: &str = "export-dialog";
@@ -14,37 +18,6 @@ pub const SIDE: &str = "side-question-";
 
 /// What a command's dialog holds: nothing until Claude Code answers, then the answer or why it couldn't.
 pub type Answer<T> = Option<Result<T, String>>;
-
-#[derive(Debug, PartialEq)]
-pub enum Typed<'a> {
-    Status,
-    Export,
-    Btw(&'a str),
-    Plan(&'a str),
-}
-
-/// The command a draft is: `/status` and `/export` alone, `/btw` and `/plan` with something after them. A bare `/plan`
-/// goes to Claude Code, which switches to plan mode by itself.
-pub fn parse(text: &str) -> Option<Typed<'_>> {
-    let text = text.trim();
-    match text {
-        "/status" => return Some(Typed::Status),
-        "/export" => return Some(Typed::Export),
-        _ => {}
-    }
-    let (name, rest) = text.split_once(char::is_whitespace)?;
-    let rest = rest.trim();
-    match (name, rest.is_empty()) {
-        ("/btw", false) => Some(Typed::Btw(rest)),
-        ("/plan", false) => Some(Typed::Plan(rest)),
-        _ => None,
-    }
-}
-
-/// A draft that is a whole command, ready to send: the command list over it would take the Enter.
-pub fn is_whole(text: &str) -> bool {
-    matches!(parse(text), Some(Typed::Status | Typed::Export))
-}
 
 /// One section of the status dialog: a title and its rows, each a label and a value. A row may have no label.
 #[derive(Debug, Clone, PartialEq)]
@@ -157,42 +130,63 @@ impl Session {
     /// that is none of them. `/plan` sets the mode and sends the task in the same write, queued while Claude works as
     /// any message is. `stamp` and `n` are the time and the write's number, as `send` takes them.
     pub fn typed_command(&mut self, text: &str, stamp: u64, n: u32) -> Option<String> {
-        Some(match parse(text)? {
-            Typed::Status => {
+        let Some(Found::Own(local, rest)) = crate::builtin::recognize(text, &self.commands) else {
+            return None;
+        };
+        Some(match local {
+            Local::Status => {
                 self.cmds.status = Some(None);
                 request(STATUS, json!({ "subtype": "get_status" }))
             }
-            Typed::Export => {
+            Local::Export => {
                 self.cmds.export = Some(None);
                 request(EXPORT, json!({ "subtype": "export_conversation" }))
             }
-            Typed::Btw(question) => {
+            Local::Btw => {
                 let id = format!("{SIDE}{n}");
-                let line = request(&id, json!({ "subtype": "side_question", "question": question }));
-                self.cmds.side = Some(Side { id, question: question.to_owned(), answer: None, history: Vec::new(), follow: String::new() });
+                let line = request(&id, json!({ "subtype": "side_question", "question": rest }));
+                self.cmds.side = Some(Side { id, question: rest.to_owned(), answer: None, history: Vec::new(), follow: String::new() });
                 line
             }
-            Typed::Plan(task) => {
+            // Claude Code 2.1.332 answers a bare /plan in -p with "/plan isn't available in this environment."
+            Local::Plan if rest.is_empty() => self.set_mode("plan", n),
+            Local::Plan => {
                 let mode = self.set_mode("plan", n);
                 match self.working {
-                    true => mode + &self.queue(task, Vec::new(), stamp, n),
-                    false => mode + &self.send(task, &[], stamp, n),
+                    true => mode + &self.queue(rest, Vec::new(), stamp, n),
+                    false => mode + &self.send(rest, &[], stamp, n),
                 }
             }
+            _ => return None,
         })
     }
 }
 
-/// The commands the chat answers itself that Claude Code doesn't list, for the slash menu to offer: each a name, what it does
-/// and what it takes. One Claude Code lists itself stays as it lists it.
-/// The first eight commands whose name holds `typed`, Claude Code's and the chat's own. A name that starts with it goes
-/// first, so `/p` offers `/plugins` before the many skills with a `p` inside.
+/// The first eight commands that match `typed`, Claude Code's and the chat's own and the ones that run only in a terminal:
+/// a name that starts with it goes first, so `/p` offers `/plugins` before the many skills with a `p` inside, then an
+/// alias that does (`/reset` finds `/clear`), then a name with it inside. A terminal one is offered for its name or an
+/// alias only, after the ones that run here.
 pub fn menu(listed: &[Command], typed: &str) -> Vec<Command> {
     let typed = typed.to_lowercase();
-    let mut matches: Vec<Command> = listed.iter().cloned().chain(own_commands(listed)).filter(|command| command.name.to_lowercase().contains(&typed)).collect();
-    matches.sort_by_key(|command| !command.name.to_lowercase().starts_with(&typed));
+    let mut matches: Vec<((u8, bool), Command)> = crate::builtin::all(listed)
+        .into_iter()
+        .filter_map(|command| {
+            let name = command.name.to_lowercase();
+            let rank = if name.starts_with(&typed) {
+                0
+            } else if command.aliases.iter().any(|alias| alias.to_lowercase().starts_with(&typed)) {
+                1
+            } else if name.contains(&typed) && !command.terminal {
+                2
+            } else {
+                return None;
+            };
+            Some(((rank, command.terminal), command))
+        })
+        .collect();
+    matches.sort_by_key(|(key, _)| *key);
     matches.truncate(8);
-    matches
+    matches.into_iter().map(|(_, command)| command).collect()
 }
 
 /// The `/word` the draft ends in when it comes after a space or a line start, as Claude Code completes a command partway
@@ -214,37 +208,22 @@ pub fn mid_menu(listed: &[Command], query: &str, all: bool) -> Vec<Command> {
         return Vec::new();
     }
     let query = query.to_lowercase();
-    let mut seen = std::collections::HashSet::new();
-    let mut matches: Vec<(bool, Command)> = listed
-        .iter()
-        .cloned()
-        .chain(own_commands(listed))
+    let mut matches: Vec<(bool, Command)> = runnable(listed)
         .filter_map(|command| {
             let name = command.name.to_lowercase();
             let full = name.starts_with(&query);
             (full || name.rsplit(':').next().is_some_and(|bare| bare.starts_with(&query))).then_some((!full, command))
         })
-        .filter(|(_, command)| seen.insert(command.name.clone()))
         .collect();
     matches.sort_by_key(|(bare, _)| *bare);
     matches.truncate(if query.is_empty() { 40 } else { 8 });
     matches.into_iter().map(|(_, command)| command).collect()
 }
 
-pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
-    [
-        ("status", "Show the version, account, model and settings sources", ""),
-        ("export", "Export the conversation as text", ""),
-        ("btw", "Ask a side question without adding it to the conversation", "<question>"),
-        ("plan", "Switch to plan mode, and plan a task", "<task>"),
-        ("remote-control", "Continue this chat from claude.ai or the Claude app", "<name>"),
-    ]
-    .into_iter()
-    .filter(move |(name, ..)| listed.iter().all(|command| command.name != *name))
-    .map(|(name, description, hint)| Command { name: name.to_owned(), description: description.to_owned(), hint: hint.to_owned(), plugin: false, builtin: false })
-    // The views the chat opens itself, from the table in `builtin.rs` and the screens in `screens.rs`.
-    .chain(crate::builtin::menu(listed))
-    .chain(crate::builtin::screen_menu(listed))
+/// The commands that run in the chat, Claude Code's and its own: what a `/word` partway through a message completes, as
+/// only a command that starts the message runs, and a terminal one runs nowhere here.
+pub fn runnable(listed: &[Command]) -> impl Iterator<Item = Command> {
+    crate::builtin::all(listed).into_iter().filter(|command| !command.terminal)
 }
 
 #[cfg(test)]
@@ -261,16 +240,31 @@ mod tests {
 
     #[test]
     fn the_menu_puts_the_names_that_start_with_what_was_typed_first() {
-        let skill = |name: &str| Command { name: name.into(), description: String::new(), hint: String::new(), plugin: false, builtin: false };
+        let skill = |name: &str| Command { name: name.into(), ..Command::default() };
         let listed: Vec<Command> = (0..10).map(|n| skill(&format!("dev-core:skill-{n}-plan"))).collect();
         let names: Vec<String> = menu(&listed, "P").into_iter().map(|command| command.name).collect();
         assert_eq!(names.len(), 8);
-        assert_eq!(names[..4], ["plan", "plugins", "permissions", "dev-core:skill-0-plan"], "{names:?}");
+        // Then the ones that run only in a terminal, by name, before a name with the letter inside.
+        assert_eq!(names[..7], ["plan", "plugins", "permissions", "passes", "powerup", "privacy-settings", "dev-core:skill-0-plan"], "{names:?}");
+    }
+
+    /// Claude Code lists `/clear` with the aliases `/reset` and `/new`: typing one offers `/clear`.
+    #[test]
+    fn the_menu_finds_a_command_by_its_alias_and_offers_terminal_ones_with_a_mark() {
+        let clear = Command { name: "clear".into(), aliases: vec!["reset".into(), "new".into()], builtin: true, ..Command::default() };
+        let skill = Command { name: "news-digest".into(), ..Command::default() };
+        let names = |typed: &str| menu(&[clear.clone(), skill.clone()], typed).into_iter().map(|command| command.name).collect::<Vec<_>>();
+        assert_eq!(names("new"), ["news-digest", "clear"]);
+        assert_eq!(names("reset"), ["clear"]);
+        let theme = menu(&[], "them");
+        assert_eq!((theme[0].name.as_str(), theme[0].terminal), ("theme", true));
+        // Partway through a message only what runs here completes.
+        assert!(mid_menu(&[], "them", false).is_empty());
     }
 
     #[test]
     fn a_slash_word_after_a_space_completes_by_prefix_or_bare_name_and_a_path_matches_nothing() {
-        let skill = |name: &str| Command { name: name.into(), description: String::new(), hint: String::new(), plugin: false, builtin: false };
+        let skill = |name: &str| Command { name: name.into(), ..Command::default() };
         let listed = [skill("compact"), skill("myplugin:deploy-app"), skill("commit"), skill("review")];
         assert_eq!(mid_active("run the tests, then /com"), Some((20, "com")));
         assert_eq!(mid_active("see\n/x"), Some((4, "x")));
@@ -280,17 +274,6 @@ mod tests {
         assert_eq!(names("deploy", false), ["myplugin:deploy-app"]);
         assert!(names("tmp/notes.md", false).is_empty() && names("", false).is_empty());
         assert!(names("", true).len() >= 4);
-    }
-
-    #[test]
-    fn the_commands_are_told_by_their_name_and_what_follows_it() {
-        assert_eq!(parse(" /status "), Some(Typed::Status));
-        assert_eq!(parse("/export"), Some(Typed::Export));
-        assert_eq!(parse("/btw  what is a monad? "), Some(Typed::Btw("what is a monad?")));
-        assert_eq!(parse("/plan add a dark mode"), Some(Typed::Plan("add a dark mode")));
-        // Alone, /plan goes to Claude Code, and /status or /export with words after them are not these.
-        assert!([parse("/plan"), parse("/btw"), parse("/status now"), parse("/export file.txt"), parse("plan x")].iter().all(Option::is_none));
-        assert!(is_whole("/status") && is_whole("/export") && !is_whole("/btw hi") && !is_whole("/stat"));
     }
 
     #[test]
@@ -389,10 +372,22 @@ mod tests {
 
     #[test]
     fn the_slash_menu_offers_these_commands_unless_claude_code_lists_them() {
-        let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }).collect::<Vec<_>>();
-        let own: Vec<String> = own_commands(&listed(&["clear"])).map(|command| command.name).collect();
-        assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions", "skills", "model", "effort", "rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
-        let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage", "model"])).map(|command| command.name).collect();
-        assert_eq!(own, ["export", "btw", "remote-control", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions", "skills", "effort", "rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
+        let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), ..Command::default() }).collect::<Vec<_>>();
+        let own = |names: &[&str]| runnable(&listed(names)).map(|command| command.name).skip(names.len()).collect::<Vec<_>>();
+        let every = ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "context", "hooks", "memory", "permissions", "skills", "model", "effort", "rewind", "resume", "fork", "branch", "tasks", "workflows", "copy", "bookmarks", "diff", "add-dir", "help", "login", "release-notes", "exit"];
+        assert_eq!(own(&["clear"]), every);
+        let without: Vec<&str> = every.into_iter().filter(|name| !["plan", "status", "usage", "model"].contains(name)).collect();
+        assert_eq!(own(&["plan", "status", "usage", "model"]), without);
+    }
+
+    #[test]
+    fn a_bare_plan_only_switches_to_plan_mode() {
+        let mut session = Session::default();
+        let lines = sent(&session.typed_command("/plan", 7, 2).unwrap());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["request"], json!({ "subtype": "set_permission_mode", "mode": "plan" }));
+        assert!(session.items.is_empty() && !session.working);
+        // A bare /btw asks nothing: the chat says how it is typed.
+        assert_eq!(session.typed_command("/btw", 7, 3), None);
     }
 }

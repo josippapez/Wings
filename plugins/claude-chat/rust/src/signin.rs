@@ -24,11 +24,6 @@ pub struct SignIn {
     pub error: Option<String>,
 }
 
-/// Whether a draft is Claude Code's `/login`, which the chat runs itself.
-pub fn is_login(draft: &str) -> bool {
-    draft.trim() == "/login"
-}
-
 /// Whether what Claude Code said is that nobody is signed in: "Not logged in · Please run /login", "Invalid API key ·
 /// Please run /login".
 pub fn needed(said: &str) -> bool {

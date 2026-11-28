@@ -86,7 +86,7 @@ fn a_queued_plugin_command_says_it_runs_when_claude_finishes_and_a_message_does_
         chat::with(|c| {
             c.session.queued.clear();
             c.session.commands = crate::session::Session::default().commands;
-            c.session.commands.push(crate::session::Command { name: "toolbox:lint".into(), description: String::new(), hint: String::new(), plugin: true, builtin: false });
+            c.session.commands.push(crate::session::Command { name: "toolbox:lint".into(), plugin: true, ..Default::default() });
             for (n, text) in texts.iter().enumerate() {
                 c.session.queue(text, Vec::new(), 1, n as u32 + 1);
             }

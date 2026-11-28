@@ -1300,7 +1300,7 @@ fn a_command_with_a_plugin_key_waits_for_the_turns_end_and_no_other_does() {
 
 #[test]
 fn a_plugins_skills_are_the_commands_named_after_it() {
-    let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }).collect::<Vec<_>>();
+    let commands = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), ..Command::default() }).collect::<Vec<_>>();
     let all = commands(&["toolbox:lint", "toolbox:format", "toolbox-extra:x", "review", "release-notes:write"]);
     assert_eq!([plugins::skills(&all, "toolbox"), plugins::skills(&all, "release-notes"), plugins::skills(&all, "lint-guard")], [2, 1, 0]);
 }

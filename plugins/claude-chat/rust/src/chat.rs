@@ -24,7 +24,7 @@ use crate::{
     mentions::{self, Files},
     plugins, prefs,
     composer::{self, Escape},
-    session::{self, Command, Draft, Item, Restore, Session, exits},
+    session::{self, Command, Draft, Item, Restore, Session},
     usage::Panel,
 };
 
@@ -131,6 +131,8 @@ pub struct Chat {
     pub fork_ask: bool,
     /// The model and effort dialog of `/model` is open (`screens.rs`).
     pub model_dialog: bool,
+    /// The `/help` dialog, while it is open, with what its search field holds (`help_view.rs`).
+    pub help: Option<String>,
     /// Where this chat was forked from, as the note at its top says: the name of the original session.
     pub forked_from: Option<String>,
     /// Whether the tab is narrower than the side panel and the conversation need side by side, as the page's split says: None
@@ -259,6 +261,7 @@ thread_local! {
         fork_from: None,
         fork_ask: false,
         model_dialog: false,
+        help: None,
         forked_from: None,
         narrow: None,
         dock_narrow: None,
@@ -560,6 +563,7 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.fork_from = None;
     c.fork_ask = false;
     c.model_dialog = false;
+    c.help = None;
     c.message_to = None;
     c.trust.card = Default::default();
     // A wait for a usage limit that the tab kept across a restart of Wings goes on.
@@ -1010,6 +1014,18 @@ pub(crate) fn write(make: impl FnOnce(&mut Chat, u32) -> Option<String>) {
     crate::reattach::sync();
 }
 
+/// The request that has Claude Code look for skills on disk again (`/help`). Its answer lists only skills: the whole list
+/// comes as `commands_changed` before it, when it changed.
+pub const RELOAD_SKILLS: &str = "reload-skills";
+
+/// One of the chat's own commands, and what follows its name, owned.
+fn own(found: &crate::builtin::Found) -> Option<(crate::builtin::Local, String)> {
+    match found {
+        crate::builtin::Found::Own(local, rest) => Some((*local, (*rest).to_owned())),
+        _ => None,
+    }
+}
+
 /// Opens the view a built-in command names, and gives the request lines that fill it, which only read.
 fn open_builtin(c: &mut Chat, local: crate::builtin::Local) -> String {
     use crate::builtin::Local;
@@ -1024,30 +1040,62 @@ fn open_builtin(c: &mut Chat, local: crate::builtin::Local) -> String {
         }
         Local::Setup(which) => c.session.setup.open(which),
         Local::Skills => c.session.skills.open(),
+        // The rest open no view of these.
+        _ => String::new(),
     }
 }
 
-/// Sends the draft as your message, or queues it while Claude works.
+/// Sends the draft as your message, or queues it while Claude works. A `/name` the chat answers itself, or one Claude Code
+/// runs only in its terminal, isn't sent (`builtin.rs`).
 pub fn send() {
-    // /exit ends the session, as in Claude Code: the tab closes, and the Claude Code it runs stops with it.
-    if with(|c| c.images.is_empty() && exits(&c.draft)) {
-        drop(host::close_tab());
-        return;
-    }
-    // /login can't run in Claude Code here (it isn't available in stream-json mode): the chat signs in itself.
-    if with(|c| c.images.is_empty() && crate::signin::is_login(&c.draft)) {
-        with(|c| c.draft.clear());
-        composer::forget();
-        return crate::signin::start();
-    }
-    // A bare /model, /rewind, /tasks and the rest open the chat's own screen for it (`screens.rs`), which asks nothing of Claude Code.
-    if let Some(screen) = with(|c| c.images.is_empty().then(|| crate::screens::find(&c.draft, &c.session.commands)).flatten()) {
-        with(|c| c.draft.clear());
-        return crate::screens::open(screen);
-    }
-    // /add-dir starts Claude Code again with the folder, and isn't sent as a message.
-    if let Some(path) = with(|c| fork::add_dir_command(&c.draft).filter(|_| c.images.is_empty()).map(str::to_owned)) {
-        return fork_view::add_dir(path);
+    use crate::builtin::{Found, Local};
+    let found = with(|c| c.images.is_empty().then(|| crate::builtin::recognize(&c.draft, &c.session.commands).map(|found| (crate::builtin::note(&found), own(&found)))).flatten());
+    match found {
+        // A command it can't run as typed, or one only Claude Code's terminal runs: the chat says so, and sends nothing.
+        Some((Some(said), _)) => {
+            return with(|c| {
+                c.draft.clear();
+                composer::forget();
+                c.session.items.push(Item::Notice(said));
+            });
+        }
+        // /exit ends the session, as in Claude Code: the tab closes, and the Claude Code it runs stops with it.
+        Some((None, Some((Local::Exit, _)))) => {
+            drop(host::close_tab());
+            return;
+        }
+        // /login can't run in Claude Code here (it isn't available in stream-json mode): the chat signs in itself.
+        Some((None, Some((Local::Login, _)))) => {
+            with(|c| c.draft.clear());
+            composer::forget();
+            return crate::signin::start();
+        }
+        // A bare /model, /rewind, /tasks and the rest open the chat's own screen for it (`screens.rs`), which asks nothing of Claude Code.
+        Some((None, Some((Local::Screen(screen), _)))) => {
+            with(|c| c.draft.clear());
+            return crate::screens::open(screen);
+        }
+        // /add-dir starts Claude Code again with the folder, and isn't sent as a message.
+        Some((None, Some((Local::AddDir, path)))) => return fork_view::add_dir(fork::unquoted(&path).to_owned()),
+        // /diff opens the diff viewer on what changed in the folder.
+        Some((None, Some((Local::Diff, _)))) => {
+            with(|c| c.draft.clear());
+            return review_changes();
+        }
+        Some((None, Some((Local::Open(url), _)))) => {
+            with(|c| c.draft.clear());
+            return host::open_url(url);
+        }
+        // /help lists every command, and asks Claude Code to look for skills on disk again with the key that opened it:
+        // typing doesn't let a page write. Claude Code sends the whole list again first when it changed.
+        Some((None, Some((Local::Help, query)))) => {
+            with(|c| {
+                c.help = Some(query);
+                c.draft.clear();
+            });
+            return write(|_, _| Some(session::request(RELOAD_SKILLS, json!({ "subtype": "reload_skills" }))));
+        }
+        _ => {}
     }
     // With Worktree on, the first message makes the worktree and starts Claude Code there, which then sends it.
     if crate::worktree::intercept() {
@@ -1065,15 +1113,19 @@ pub fn send() {
         }
         // The built-in commands that open a view here aren't sent as a message, not even queued.
         if c.images.is_empty() {
-            // /remote-control turns Remote Control on, or off when it is on, as in Claude Code.
-            if let Some(name) = crate::remote::command(&text) {
-                c.draft.clear();
-                return Some(remote_line(c, name));
-            }
-            // /usage, /plugins and the rest of `builtin::TABLE` open their view here, unless Claude Code lists the name as its own.
-            if let Some(local) = crate::builtin::find(&text, &c.session.commands) {
-                c.draft.clear();
-                return Some(open_builtin(c, local));
+            match crate::builtin::recognize(&text, &c.session.commands) {
+                // /remote-control turns Remote Control on, or off when it is on, as in Claude Code.
+                Some(Found::Own(Local::RemoteControl, name)) => {
+                    let name = (!name.is_empty()).then(|| name.to_owned());
+                    c.draft.clear();
+                    return Some(remote_line(c, name.as_deref()));
+                }
+                // /usage, /plugins and the rest of `builtin::TABLE` that open a view open it here.
+                Some(Found::Own(local @ (Local::Panel(_) | Local::Dialog(_) | Local::Setup(_) | Local::Skills), _)) => {
+                    c.draft.clear();
+                    return Some(open_builtin(c, local));
+                }
+                _ => {}
             }
             // `!command` runs in the chat's folder, as in a terminal, and Claude reads what it printed with your next message.
             if let Some(command) = crate::shell::command(&text) {
@@ -1393,13 +1445,13 @@ pub fn search_skills(query: &str) {
 /// Escape: closes the dialog or sheet that is open, else stops the turn while Claude works.
 pub fn escape() {
     let (dialog, working) = with(|c| {
-        let open = c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some() || c.session.skills.open;
+        let open = c.help.is_some() || c.panel.is_some() || c.plugins.is_some() || c.task.is_some() || c.session.rewind.is_some() || c.session.setup.open.is_some() || c.session.skills.open;
         (open, c.session.working)
     });
     match composer::escape(dialog, working) {
         Escape::Close => with(|c| {
             // The one opened last is on top: the setup dialog's form, then the dialogs over the chat.
-            let _ = std::mem::take(&mut c.session.skills.open) || c.session.setup.form.take().is_some() || c.session.setup.open.take().is_some() || c.session.rewind.take().is_some() || c.task.take().is_some() || c.plugins.take().is_some() || c.panel.take().is_some();
+            let _ = c.help.take().is_some() || std::mem::take(&mut c.session.skills.open) || c.session.setup.form.take().is_some() || c.session.setup.open.take().is_some() || c.session.rewind.take().is_some() || c.task.take().is_some() || c.plugins.take().is_some() || c.panel.take().is_some();
         }),
         Escape::Stop => stop(),
         Escape::Nothing => {}
@@ -1459,9 +1511,8 @@ pub fn recall_newer() {
 /// for `/mc` before the page showed `/mcp` otherwise only filled `/mcp ` in.
 pub fn insert_command(name: &str) {
     let opens = with(|c| {
-        let whole = format!("/{name}");
-        let opens = crate::builtin::find(&whole, &c.session.commands).is_some() || crate::screens::find(&whole, &c.session.commands).is_some();
-        c.draft = if opens { whole } else { format!("/{name} ") };
+        let opens = crate::builtin::runs_bare(name, &c.session.commands);
+        c.draft = if opens { format!("/{name}") } else { format!("/{name} ") };
         opens
     });
     if opens {
@@ -1476,7 +1527,7 @@ pub fn command_matches(c: &Chat) -> Vec<Command> {
         return Vec::new();
     };
     // Typed out in full, the command is ready: a list over it would take the Enter that opens its view.
-    if crate::builtin::find(&c.draft, &c.session.commands).is_some() || crate::screens::find(&c.draft, &c.session.commands).is_some() || exits(&c.draft) || commands::is_whole(&c.draft) {
+    if crate::builtin::runs_bare(typed, &c.session.commands) {
         return Vec::new();
     }
     commands::menu(&c.session.commands, typed)
