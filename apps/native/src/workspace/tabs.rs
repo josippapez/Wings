@@ -411,7 +411,10 @@ impl Workspace {
             .track_focus(focus)
             .flex_1()
             // Tabs shrink to 100 before the strip scrolls: at 144, five in a 1000 point window cut the first to a letter.
-            .min_w(px(100.0))
+            // The split map and the running dot don't shrink, so they add their room: the title keeps its own.
+            .min_w(px(
+                100.0 + if splits.is_some() { 22.0 } else { 0.0 } + if running_dot.is_some() { 12.0 } else { 0.0 },
+            ))
             .h(px(28.0))
             .relative()
             .flex()

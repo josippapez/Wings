@@ -1769,6 +1769,47 @@ fn five_tabs_fit_a_1000_point_window_without_scrolling() {
     });
 }
 
+/// Tabs run on past the strip's ends: a shade says so at the end with more, and not at the other.
+#[test]
+fn a_cut_tab_strip_is_shaded_where_tabs_run_on() {
+    let (_app, mut window) = open_sized(Some(size(px(640.0), px(640.0))), |_| {});
+    for _ in 0..8 {
+        press(&mut window, "t");
+    }
+    window.draw();
+    let scrolled_to = |window: &mut TestAppWindow<Workspace>, end: bool| {
+        crate::ui::forget_spots();
+        window.update(|w, _, cx| {
+            let to = if end { -w.tab_scroll.max_offset().x } else { px(0.0) };
+            w.tab_scroll.set_offset(point(to, px(0.0)));
+            cx.notify_workspace();
+        });
+        window.draw();
+    };
+    scrolled_to(&mut window, false);
+    assert!(crate::ui::spot_at("tabs-fade-end").is_some(), "more tabs after the last one shown");
+    assert!(crate::ui::spot_at("tabs-fade-start").is_none(), "nothing before the first");
+    scrolled_to(&mut window, true);
+    assert!(crate::ui::spot_at("tabs-fade-start").is_some());
+    assert!(crate::ui::spot_at("tabs-fade-end").is_none());
+}
+
+/// The split map after a title takes its own room: the tab grows past 100 points by it, so the title isn't cut to a letter.
+#[test]
+fn a_split_tab_keeps_room_for_its_title() {
+    let (_app, mut window) = open_sized(Some(size(px(640.0), px(640.0))), |_| {});
+    for _ in 0..5 {
+        press(&mut window, "t");
+    }
+    press(&mut window, "d");
+    window.draw();
+    let width = window.read(|w, _| {
+        let tab = w.tab_scroll.bounds_for_item(w.tabs().iter().position(|tab| *tab == w.active()).unwrap()).unwrap();
+        tab.size.width
+    });
+    assert!(width >= px(122.0), "the tab was {width:?} wide");
+}
+
 #[test]
 fn a_mouse_wheel_scrolls_overflowing_tabs_sideways() {
     let (app, mut window) = open_sized(Some(size(px(1000.0), px(640.0))), |_| {});

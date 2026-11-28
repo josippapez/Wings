@@ -19,6 +19,10 @@ use super::{Workspace, shortcut_label};
 /// The desktop's `h-10`.
 pub(super) const TITLE_BAR_HEIGHT: f32 = 40.0;
 
+/// The width of the shade at a cut end of the tab strip, and how far from its end the strip counts as scrolled.
+const TAB_EDGE: f32 = 20.0;
+const TAB_EDGE_SLACK: f32 = 1.0;
+
 /// One entry of the new tab menu: a plugin page that offers itself as a new tab.
 struct NewPage {
     plugin: String,
@@ -32,6 +36,7 @@ impl Workspace {
     pub(super) fn title_bar(&self, tabs: Vec<AnyElement>, cx: &mut Context<Self>) -> AnyElement {
         let (sidebar, width) = (self.sidebar, self.side.width);
         let (back, forward) = (self.can_navigate(true), self.can_navigate(false));
+        let (offset, max) = (self.tab_scroll.offset(), self.tab_scroll.max_offset());
         div()
             .id("title-bar")
             // As wide as the window, not as its tabs: wider, the tabs pushed the + button off the window instead of
@@ -92,24 +97,50 @@ impl Workspace {
             )
             .child(
                 div()
-                    .id("tabs")
-                    .role(Role::TabList)
-                    .aria_label("Tabs")
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .overflow_x_scroll()
-                    .track_scroll(&self.tab_scroll)
-                    .children(tabs)
-                    .children(crate::ui::cutoff::clips_on_purpose()),
+                    .child(
+                        div()
+                            .id("tabs")
+                            .role(Role::TabList)
+                            .aria_label("Tabs")
+                            .size_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .overflow_x_scroll()
+                            .track_scroll(&self.tab_scroll)
+                            .children(tabs)
+                            .children(crate::ui::cutoff::clips_on_purpose()),
+                    )
+                    .children(self.tab_edge(90.0, offset.x < px(-TAB_EDGE_SLACK)))
+                    .children(self.tab_edge(270.0, offset.x > -max.x + px(TAB_EDGE_SLACK))),
             )
             // With no project there is nothing to open a tab in.
             .when(!self.welcome, |bar| bar.child(self.new_tab_buttons(cx)))
             .children(self.tab_drag_listeners(cx))
             .into_any_element()
+    }
+
+    /// A shade over one end of the tab strip where tabs run on past it, so a cut tab reads as continuing. `angle` is the
+    /// gradient's, 90 for the start and 270 for the end; it is black, as the bar's own ground may be see-through.
+    fn tab_edge(&self, angle: f32, more: bool) -> Option<gpui::Div> {
+        let shade = gpui::linear_gradient(
+            angle,
+            gpui::linear_color_stop(gpui::rgba(0x0000005c), 0.0),
+            gpui::linear_color_stop(gpui::rgba(0x00000000), 1.0),
+        );
+        more.then(|| {
+            // No id and no handlers, so a click or a drag on the tab under the shade still reaches the tab.
+            let edge = div().absolute().top_0().h_full().w(px(TAB_EDGE)).bg(shade);
+            if angle < 180.0 {
+                edge.left_0().children(ui::spot(|| "tabs-fade-start".into()))
+            } else {
+                edge.right_0().children(ui::spot(|| "tabs-fade-end".into()))
+            }
+        })
     }
 
     /// The + button, and the chevron beside it that opens the menu of what a new tab can be. With "Choose each time"
