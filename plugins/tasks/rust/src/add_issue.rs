@@ -88,11 +88,11 @@ fn line(wide: bool) -> Node {
         });
     let add = Node::new("Button").prop("disabled", busy || title.trim().is_empty()).on("onClick", |_| submit());
     let add = if busy { add.child(Node::new("Spinner")).text("Add") } else { add.text("Add") };
+    // The field takes the line's width, and the bar's has the keyboard as it opens.
+    let field = Node::new("Stack").prop("grow", true).child(if wide { field.prop("autoFocus", true) } else { field });
     if !wide {
-        return row("s").child(field).child(add).maybe(error.map(|error| error_text(&error).prop("size", "small")));
+        return row("s").prop("align", "center").prop("grow", true).child(field).child(add).maybe(error.map(|error| error_text(&error).prop("size", "small")));
     }
-    // The field takes the bar's width, and has the keyboard as it opens.
-    let field = Node::new("Stack").prop("grow", true).child(field.prop("autoFocus", true));
     let cancel = Node::new("Button").prop("variant", "ghost").on("onClick", |_| with(|add| add.open = false)).text("Cancel");
     let line = row("s").prop("align", "center").child(field).child(add).child(cancel);
     Node::new("Stack").prop("gap", "xs").child(line).maybe(error.map(|error| error_text(&error).prop("size", "small")))
@@ -113,6 +113,7 @@ mod tests {
         with(|add| add.open = false);
         assert!(bar().is_none());
         // The Project page's block keeps its own line, without Cancel.
-        assert!(!wings_plugin::ui::tree_json(node()).to_string().contains("Cancel"));
+        let block = wings_plugin::ui::tree_json(node()).to_string();
+        assert!(!block.contains("Cancel") && block.contains(r#""grow":true"#), "the block's field takes the width beside Add: {block}");
     }
 }

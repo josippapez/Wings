@@ -71,7 +71,7 @@ pub fn node(issue: &Issue, issues: &[Issue]) -> Option<Node> {
     } else {
         vec![action(format!("Delete {}", issue.key), "destructive", Box::new(move || delete(key.clone(), false)))]
     };
-    actions.insert(0, action("Keep it".into(), "ghost", Box::new(cancel)));
+    actions.insert(0, action("Keep it".into(), "outline", Box::new(cancel)));
     let said = line(format!("{}This removes {} and its log. Keys are never used again.", if below > 0 { format!("It has {children}. ") } else { String::new() }, if below > 0 { "what you delete" } else { "the issue" }), None, None);
     let body = stack("m")
         .child(line(issue.title.clone(), None, None).prop("weight", "medium"))

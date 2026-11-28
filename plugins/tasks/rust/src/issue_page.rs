@@ -593,7 +593,7 @@ fn children_section(issue: &Issue, issues: &[Issue]) -> Node {
         )
     }));
     stack("s")
-        .child(section_heading("Child issues", if total > 0 { format!("{done} of {total} done") } else { String::new() }))
+        .child(section_heading("Child issues", String::new()))
         .maybe((total > 0).then(|| child_progress(done, total)))
         .child(if children.is_empty() { muted("None yet. Open an issue and choose this one as its parent.").prop("size", "small") } else { list })
 }
@@ -906,6 +906,15 @@ mod tests {
         assert_eq!((narrow["type"].as_str(), narrow["props"]["variant"].as_str(), narrow["props"]["width"].is_null()), (Some("Card"), Some("rows"), true), "{narrow}");
         let wide = wings_plugin::ui::tree_json(properties(&issue, &[issue.clone()], &project, false));
         assert_eq!((wide["type"].as_str(), wide["props"]["width"].as_f64()), (Some("Stack"), Some(f64::from(PROPERTY_WIDTH))), "{wide}");
+    }
+
+    /// The bar under "Child issues" says how many are done, so the heading doesn't say it again.
+    #[test]
+    fn the_child_issues_heading_does_not_repeat_the_progress_bar() {
+        let store = make(&fresh(), "Epic", |c| c.rel.kind = Some("epic".into()));
+        let store = make(&store, "Child", |c| c.rel.parent = Some("WEB-1".into()));
+        let shown = wings_plugin::ui::tree_json(children_section(&store.issues[0], &store.issues)).to_string();
+        assert!(shown.contains("0/1") && !shown.contains("0 of 1 done\""), "{shown}");
     }
 
     /// Twelve commits show three and a "+9 more" button, which opens them all.

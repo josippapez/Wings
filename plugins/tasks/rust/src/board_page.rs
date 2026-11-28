@@ -20,7 +20,7 @@ use std::{cell::RefCell, collections::HashMap, future::Future, rc::Rc};
 use wings_plugin::{
     host,
     task::spawn,
-    ui::{Node, checkbox, chips, empty, error_state, loading, page_with, search_field, slot, title_with_context, toolbar_titled},
+    ui::{self, Node, checkbox, chips, empty, error_state, icon_button, icons, loading, page_with, search_field, slot, title_with_context, toolbar_titled},
 };
 
 /// How many cards a column of the board shows at first, and rows the list does, and how many more each Show more adds.
@@ -30,6 +30,13 @@ const LIST_ROWS: usize = 150;
 /// The width of a row's priority and key, so the titles after them line up: the widest priority and 52 points for a key.
 const PRIORITY_WIDTH: u32 = 20;
 const KEY_WIDTH: u32 = 52;
+/// The widths of a row's parent, children bar and session badge, so the cells after the title line up row to row and only
+/// the title takes what is left.
+const PARENT_WIDTH: u32 = 112;
+const PROGRESS_WIDTH: u32 = 64;
+const BADGE_WIDTH: u32 = 96;
+const STATUS_WIDTH: u32 = 80;
+const TIME_WIDTH: u32 = 72;
 
 const EMPTY: [(Status, &str); 5] = [
     (Status::Todo, "Nothing waiting"),
@@ -210,22 +217,39 @@ fn issue_row(i: &Issue, issues: &[Issue], parent: Option<&Issue>, depth: Option<
     let for_open = i.key.clone();
     let mut button = Node::new("ListButton").prop("label", format!("Open {}: {}", i.key, i.title)).on("onClick", move |_| open_issue(&for_open)).on("onKeyDown", delete_button(&i.key));
     if let Some(depth) = depth.filter(|d| *d > 0) {
-        button = button.prop("indent", 41 + (depth - 1) * 24);
+        button = button.prop("indent", 34 + (depth - 1) * 24);
     }
     if depth.is_some_and(|d| d > 1) {
-        button = button.child(muted("└").prop("size", "small"));
+        button = button.child(ui::icon(24, 2.0, &icons::CORNER_DOWN_RIGHT).prop("size", 12));
     }
     button = button
         .child(priority_cell(i.priority))
         .child(column(KEY_WIDTH).child(key_text(&i.key)))
         .child(type_icon(i.kind, false, 14))
         .child(title_text(i, false))
-        .maybe(parent.map(|p| row("s").child(type_icon(p.kind, false, 14)).child(line(p.title.as_str(), Some("muted"), Some("tiny")).prop("truncate", true).prop("grow", true))))
-        .maybe((total > 0).then(|| child_progress(done, total)))
-        .maybe(session_marker(i))
+        .maybe(depth.is_none().then(|| parent_cell(parent)))
+        .child(meta_cells((total > 0).then(|| child_progress(done, total)), session_marker(i)))
         .maybe(depth.map(|_| status_column(i.status)))
         .child(time_column(Some(i.updated_at)));
     Node::new("ListItem").key(i.key.as_str()).child(button)
+}
+
+/// A row's parent, in a column of its own width (empty for an issue with none) so the cells after it line up.
+fn parent_cell(parent: Option<&Issue>) -> Node {
+    column(PARENT_WIDTH).maybe(parent.map(|p| row("s").child(type_icon(p.kind, false, 14)).child(line(p.title.as_str(), Some("muted"), Some("tiny")).prop("truncate", true).prop("grow", true))))
+}
+
+/// A row's children bar and session badge, each in a column of its own width, empty when the row has none.
+fn meta_cells(progress: Option<Node>, badge: Option<Node>) -> Node {
+    row("s").child(column(PROGRESS_WIDTH).maybe(progress)).child(column(BADGE_WIDTH).maybe(badge))
+}
+
+/// A group's head: a chevron that folds it, then `label`, as one style for a parent's and for "No parent".
+fn group_head(open: bool, fold_key: String, label: &str, content: Node) -> Node {
+    let chevron: &[&str] = if open { &icons::CHEVRON_DOWN } else { &icons::CHEVRON_RIGHT };
+    Node::new("ListItem").key(format!("head:{fold_key}")).child(
+        row("s").prop("align", "center").prop("grow", true).child(icon_button(label, chevron, move || fold(&fold_key, !open)).prop("size", "icon-xs").prop("aria-expanded", open)).child(content),
+    )
 }
 
 /// A row's title: one line, muted for an issue that is finished, and strong for a group's head.
@@ -241,14 +265,15 @@ fn key_text(key: &str) -> Node {
 
 /// A row's status, muted and as wide as the column that keeps them in line down the list.
 fn status_column(status: Status) -> Node {
-    column(92).child(row("s").child(status_dot(status)).child(line(status.label(), Some("muted"), Some("tiny"))))
+    column(STATUS_WIDTH).child(row("s").child(status_dot(status)).child(line(status.label(), Some("muted"), Some("tiny"))))
 }
 
-/// A row's time, as wide as the column that keeps them in line; the empty one is a group head's, which takes 13 points more.
+/// A row's time, as wide as the column that keeps them in line; the empty one is a group head's, whose button sits in a row with its chevron.
 fn time_column(updated_at: Option<f64>) -> Node {
     match updated_at {
-        Some(at) => column(56).child(row("s").prop("justify", "end").child(line(wings_plugin::format::ago_now(at), Some("muted"), Some("tiny")))),
-        None => column(43),
+        Some(at) => column(TIME_WIDTH).child(row("s").prop("justify", "end").child(line(wings_plugin::format::ago_now(at), Some("muted"), Some("tiny")))),
+        // A head's button ends 6 points short of a row's, so its empty column is that much narrower.
+        None => column(TIME_WIDTH - 6),
     }
 }
 
@@ -273,7 +298,7 @@ fn lane_node(lane: &Lane, issues: &[Issue], folded: &[String]) -> Node {
         row("s").child(muted(parent.status.label()).prop("size", "small")).maybe((total > 0).then(|| child_progress(done, total)))
     });
     let header = row("s")
-        .child(Node::new("Button").prop("variant", "ghost").prop("label", label.as_str()).on("onClick", move |_| fold(&toggle_key, !open)).text(if open { "▾" } else { "▸" }))
+        .child(Node::new("Button").prop("variant", "ghost").prop("label", label.as_str()).on("onClick", move |_| fold(&toggle_key, !open)).child(ui::icon(24, 2.0, if open { &icons::CHEVRON_DOWN[..] } else { &icons::CHEVRON_RIGHT[..] }).prop("size", 14)))
         .child(title)
         .child(Node::new("Badge").prop("variant", "secondary").text(lane.count.to_string()))
         .maybe(actions);
@@ -478,22 +503,22 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
             let fold_key = root.key.clone();
             let (for_open, for_title) = (root.key.clone(), root.title.clone());
             let (done, total) = progress(children_of(all, &root.key));
-            let head = Node::new("Card").child(
-                row("s")
-                    .child(Node::new("Button").prop("variant", "ghost").prop("size", "icon-xs").prop("label", for_title).on("onClick", move |_| fold(&fold_key, !open_group)).child(Node::new("Icon").prop("name", "chevron-down")))
-                    .child(
-                        Node::new("ListButton")
-                            .prop("label", format!("Open {}: {}", root.key, root.title))
-                            .on("onClick", move |_| open_issue(&for_open))
-                            .on("onKeyDown", delete_button(&root.key))
-                            .child(priority_cell(root.priority))
-                            .child(type_icon(root.kind, true, 14))
-                            .child(column(KEY_WIDTH).child(key_text(&root.key)))
-                            .child(title_text(root, true))
-                            .maybe((total > 0).then(|| child_progress(done, total)))
-                            .child(status_column(root.status))
-                            .child(time_column(None)),
-                    ),
+            let head = group_head(
+                open_group,
+                fold_key,
+                &for_title,
+                Node::new("ListButton")
+                    .prop("grow", true)
+                    .prop("label", format!("Open {}: {}", root.key, root.title))
+                    .on("onClick", move |_| open_issue(&for_open))
+                    .on("onKeyDown", delete_button(&root.key))
+                    .child(priority_cell(root.priority))
+                    .child(column(KEY_WIDTH).child(key_text(&root.key)))
+                    .child(type_icon(root.kind, true, 14))
+                    .child(title_text(root, true))
+                    .child(meta_cells((total > 0).then(|| child_progress(done, total)), None))
+                    .child(status_column(root.status))
+                    .child(time_column(None)),
             );
             let rows = take(group.rows.len());
             hidden += group.rows.len() - rows;
@@ -503,9 +528,10 @@ fn issue_list(project: &Project, shown: &[&Issue], all: &[Issue], by_parent: boo
         if !loose.is_empty() {
             let rows = take(loose.len());
             hidden += loose.len() - rows;
-            let summary = row("s").child(line("No parent", None, None)).child(muted(loose.len().to_string()).prop("size", "small"));
-            let body = vec![Node::new("List").children(loose.iter().take(rows).map(|i| issue_row(i, all, None, Some(0))))];
-            out = out.child(list_group(is_open(""), "", summary, body));
+            let open_loose = is_open("");
+            let head = group_head(open_loose, String::new(), "No parent", row("s").child(line("No parent", None, None).prop("weight", "strong")).child(muted(loose.len().to_string()).prop("size", "small")));
+            let body = Node::new("List").children(loose.iter().take(rows).map(|i| issue_row(i, all, None, Some(0))));
+            out = out.child(stack("s").child(head).maybe(open_loose.then_some(body)));
         }
     } else {
         let mut groups: Vec<Column> = board_columns(shown.iter().copied(), show_canceled, sort).into_iter().filter(|g| !g.issues.is_empty()).collect();
