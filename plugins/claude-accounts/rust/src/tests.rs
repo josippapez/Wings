@@ -351,7 +351,8 @@ fn the_accounts_sit_in_a_card_under_a_heading_row_that_centres_its_add_button() 
     let tree = json!({ "children": wings_plugin::ui::export(views::sidebar()).0 });
     let mut cards = vec![];
     nodes(&tree, "Card", &mut cards);
-    assert!(cards.iter().any(|card| card["children"][0]["type"] == "List"), "the accounts list is the child of a card");
+    let accounts = cards.iter().find(|card| card["props"]["variant"] == "rows").expect("the accounts are the rows of one rows_card");
+    assert_eq!(accounts["children"].as_array().unwrap().len(), 3, "one row per account, split by the card's hairlines");
     let mut rows = vec![];
     nodes(&tree, "Row", &mut rows);
     let head = rows.iter().find(|row| row.to_string().contains("Add account")).expect("the heading row");

@@ -9,7 +9,7 @@ use serde_json::json;
 use wings_plugin::{
     host, messages,
     task::spawn,
-    ui::{Node, badge, button, card, checkbox, loading, muted, notice, row, select, section_label, slot, stack, text, text_input, title},
+    ui::{Node, badge, button, card, checkbox, error_state, loading, muted, notice, row, rows_card, select, section_label, stack, text, text_input, title},
 };
 
 const OPEN_A_PROJECT: &str = "Open a project to choose its Claude account.";
@@ -39,13 +39,8 @@ pub fn gate(s: &State) -> Option<Vec<Node>> {
     if s.data.is_some() {
         return None;
     }
-    let again = button("Try again", "secondary", false, || spawn(actions::reload()));
-    Some(vec![
-        Node::new("Empty")
-            .child(slot("title", text("Couldn't read the Claude accounts")))
-            .child(slot("description", text(s.error.clone().unwrap_or_default())))
-            .child(slot("children", again)),
-    ])
+    let reload: Box<dyn Fn()> = Box::new(|| spawn(actions::reload()));
+    Some(vec![error_state("Couldn't read the Claude accounts", &s.error.clone().unwrap_or_default(), Some(("Try again", reload)))])
 }
 
 fn small(node: Node) -> Node {
@@ -89,7 +84,7 @@ pub fn sidebar() -> Vec<Node> {
     if let (true, Some(project)) = (s.adding, project) {
         out.push(add_account(project, data, &s).key("add"));
     }
-    out.push(card().child(account_list(data, &s)).key("accounts"));
+    out.push(account_list(data, &s).key("accounts"));
     out
 }
 
@@ -233,7 +228,7 @@ fn not_signed_in(account: &Account, cwd: Option<&str>, place: &str, message: Str
 fn account_list(data: &Loaded, s: &State) -> Node {
     let project = s.project.as_ref().and_then(|p| p.as_ref());
     let now = project.map(|p| data.account_of(&p.id));
-    Node::new("List").children(data.accounts.iter().map(|account| {
+    rows_card(data.accounts.iter().map(|account| {
         let users = data.projects_using(account);
         let name = account.name.as_deref();
         let here = now.is_some() && now == Some(name);
@@ -243,15 +238,14 @@ fn account_list(data: &Loaded, s: &State) -> Node {
             not_signed_in(account, sign_in_dir(data, s), "list", sign_in_label(account), s)
         };
         let used = if users.is_empty() { "No projects use it".to_owned() } else { format!("Used by {}", users.join(", ")) };
-        Node::new("ListItem").key(name.unwrap_or(DEFAULT)).child(
-            stack()
-                .prop("gap", "xs")
-                .prop("grow", true)
-                .child(row().child(text(name.unwrap_or("Default")).prop("weight", "medium").prop("truncate", true)).maybe(here.then(|| badge("This project", Some("info")).prop("size", "sm"))))
-                .child(who)
-                .child(small(muted(used)).prop("clamp", true).prop("title", users.join(", ")))
-                .maybe(name.map(|name| share_setup(name, account.shares_setup, s))),
-        )
+        stack()
+            .key(name.unwrap_or(DEFAULT))
+            .prop("gap", "xs")
+            .prop("grow", true)
+            .child(row().child(text(name.unwrap_or("Default")).prop("weight", "medium").prop("truncate", true)).maybe(here.then(|| badge("This project", Some("info")).prop("size", "sm"))))
+            .child(who)
+            .child(small(muted(used)).prop("clamp", true).prop("title", users.join(", ")))
+            .maybe(name.map(|name| share_setup(name, account.shares_setup, s)))
     }))
 }
 
