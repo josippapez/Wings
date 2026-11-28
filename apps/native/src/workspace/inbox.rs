@@ -60,6 +60,8 @@ pub(super) struct Inbox {
     /// While the list is open: what was unread when it opened, so those rows stay marked while you look at them.
     pub(super) open: Option<HashSet<usize>>,
     next: usize,
+    /// What Clear took away, for Undo while the list stays open.
+    cleared: Vec<Event>,
     /// Notifications close together share one sound.
     sound: sound::Burst,
     /// The panes whose agent finished, with a sound, since you last looked at them or opened the list.
@@ -205,9 +207,26 @@ impl Workspace {
     }
 
     pub(super) fn close_inbox(&mut self, cx: &mut Context<Self>) {
+        self.inbox.cleared.clear();
         if let Some(open) = self.inbox.open.take() {
             self.leave("inbox", open, crate::ui::motion::POPUP_IN, cx);
         }
+    }
+
+    /// Clear: empties the list, keeping what it held until Undo or until the list closes.
+    pub(super) fn clear_inbox(&mut self, cx: &mut Context<Self>) {
+        if self.inbox.events.is_empty() {
+            return;
+        }
+        self.inbox.cleared = std::mem::take(&mut self.inbox.events);
+        cx.notify_workspace();
+    }
+
+    /// Undo of Clear: what it took away goes back under what came since.
+    pub(super) fn undo_clear_inbox(&mut self, cx: &mut Context<Self>) {
+        let cleared = std::mem::take(&mut self.inbox.cleared);
+        self.inbox.events.extend(cleared);
+        cx.notify_workspace();
     }
 
     fn inbox_go_to_pane(&mut self, pane: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -352,7 +371,7 @@ impl Workspace {
     pub(super) fn inbox_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let fresh = self.inbox.open.as_ref()?;
         let left = if self.sidebar {
-            self.side.width + 4.0
+            self.side.width + 8.0
         } else {
             8.0
         };
@@ -375,10 +394,7 @@ impl Workspace {
             .child(xs_button("inbox-clear", "Clear", events.is_empty()).when(
                 !events.is_empty(),
                 |button| {
-                    button.on_click(cx.listener(|this, _, _, cx| {
-                        this.inbox.events.clear();
-                        cx.notify_workspace();
-                    }))
+                    button.on_click(cx.listener(|this, _, _, cx| this.clear_inbox(cx)))
                 },
             ));
         let body = if events.is_empty() {
@@ -402,6 +418,30 @@ impl Workspace {
                         .text_color(rgb(theme::muted_foreground()))
                         .child("When an agent needs you or finishes, it shows up here."),
                 )
+                .when(!self.inbox.cleared.is_empty(), |body| {
+                    let count = self.inbox.cleared.len();
+                    body.child(
+                        div()
+                            .mt(px(8.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(rgb(theme::muted_foreground()))
+                                    .child(if count == 1 {
+                                        "Cleared 1 notification".to_string()
+                                    } else {
+                                        format!("Cleared {count} notifications")
+                                    }),
+                            )
+                            .child(
+                                action_button("inbox-undo", "Undo")
+                                    .on_click(cx.listener(|this, _, _, cx| this.undo_clear_inbox(cx))),
+                            ),
+                    )
+                })
                 .into_any_element()
         } else {
             let now = now_ms();
@@ -440,8 +480,10 @@ impl Workspace {
                         .absolute()
                         // Beside the Inbox row, the third in the sidebar's nav.
                         .top(px(TITLE_BAR_HEIGHT + 8.0 + 2.0 * (NAV_ROW + NAV_GAP)))
+                        // Both edges set and no width: it fills what the window leaves, up to 384.
                         .left(px(left))
-                        .w(px(384.0))
+                        .right(px(8.0))
+                        .max_w(px(384.0))
                         .flex()
                         .flex_col()
                         .rounded(px(8.0))
@@ -490,7 +532,7 @@ impl Workspace {
                 let (notification, button) = (notification.clone(), button.clone());
                 let id = ElementId::NamedInteger(format!("inbox-{id}-button").into(), index as u64);
                 buttons.push(
-                    xs_button(id, button.label().to_owned(), false)
+                    action_button(id, button.label().to_owned())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.inbox_button(&notification, &button, window, cx)
                         }))
@@ -538,7 +580,7 @@ impl Workspace {
                                     .flex_none()
                                     .text_size(px(11.0))
                                     .text_color(rgb(theme::muted_foreground()))
-                                    .child(ago(now, event.at)),
+                                    .child(super::history::ago(now, event.at)),
                             ),
                     )
                     .child(
@@ -549,8 +591,8 @@ impl Workspace {
                             .child(detail),
                     )
                     .when_some(event.pane, |entry, pane| {
-                        entry.child(div().mt(px(4.0)).ml(px(-8.0)).flex().child(
-                            xs_button(("inbox-go", id), "Go to pane", false).on_click(cx.listener(
+                        entry.child(div().mt(px(6.0)).flex().child(
+                            action_button(("inbox-go", id), "Go to pane").on_click(cx.listener(
                                 move |this, _, window, cx| this.inbox_go_to_pane(pane, window, cx),
                             )),
                         ))
@@ -558,8 +600,7 @@ impl Workspace {
                     .when(!buttons.is_empty(), |entry| {
                         entry.child(
                             div()
-                                .mt(px(4.0))
-                                .ml(px(-8.0))
+                                .mt(px(6.0))
                                 .flex()
                                 .flex_wrap()
                                 .gap_x(px(4.0))
@@ -662,24 +703,18 @@ fn xs_button(
         .child(label)
 }
 
+/// A button in an entry or the empty list: `xs_button` with an outline and full-strength type, so it reads as a button.
+fn action_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+    xs_button(id, label, false)
+        .border_1()
+        .border_color(rgba(HAIRLINE))
+        .text_color(rgb(theme::foreground()))
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_millis() as u64)
-}
-
-/// How long ago, as the desktop's list says it (`Intl.RelativeTimeFormat` in English, short, `numeric: "auto"`).
-fn ago(now: u64, at: u64) -> String {
-    let s = now.saturating_sub(at) / 1000;
-    match s {
-        0..60 => "just now".into(),
-        60..3600 => format!("{} min. ago", s / 60),
-        3600..86_400 => format!("{} hr. ago", s / 3600),
-        _ => match s / 86_400 {
-            1 => "yesterday".into(),
-            days => format!("{days} days ago"),
-        },
-    }
 }
 
 #[cfg(test)]

@@ -1734,6 +1734,27 @@ fn an_agent_that_finishes_again_before_you_look_sounds_once() {
     });
 }
 
+/// Clear is not final: Undo brings the notifications back under the ones that came since, and closing the list drops them.
+#[test]
+fn clearing_the_inbox_can_be_undone_until_the_list_closes() {
+    let (_app, mut window) = open_sized(None, |_| {});
+    window.update(|w, _, cx| {
+        w.sample_inbox(cx);
+        let titles = |w: &Workspace| w.inbox.events.iter().map(|e| e.title.to_string()).collect::<Vec<_>>();
+        let before = titles(w);
+        assert!(before.len() >= 3);
+        w.open_inbox(cx);
+        w.clear_inbox(cx);
+        assert!(w.inbox.events.is_empty());
+        w.undo_clear_inbox(cx);
+        assert_eq!(titles(w), before);
+        w.clear_inbox(cx);
+        w.close_inbox(cx);
+        w.undo_clear_inbox(cx);
+        assert!(w.inbox.events.is_empty(), "closing the list makes Clear final");
+    });
+}
+
 /// Fourteen tabs don't fit in 1000 points: they scroll, and the + button after them stays in the window.
 #[test]
 fn five_tabs_fit_a_1000_point_window_without_scrolling() {
