@@ -137,7 +137,9 @@ pub(super) fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
             "plugins",
         ];
         for (index, section) in sections.into_iter().enumerate() {
-            let row = point(px(left + 70.0), px(133.0 + 34.0 * index as f32));
+            // Below 800 points the list shrinks to its icons, 56 wide.
+            let (nav_x, first_row) = if width < 800.0 { (28.0, 65.0) } else { (70.0, 133.0) };
+            let row = point(px(left + nav_x), px(first_row + 34.0 * index as f32));
             click(cx, window, row);
             settle(cx, window, Duration::from_millis(200));
             save(cx, window, &name(&format!("settings-{section}")));

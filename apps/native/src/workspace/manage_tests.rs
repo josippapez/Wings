@@ -611,6 +611,18 @@ fn plugin_updates_manual_catalog_check_works_without_github_plugins() {
     assert!(window.read(|w, _| w.manage.reviews.is_empty() && w.plugin_views().is_empty()));
 }
 
+#[test]
+fn check_for_updates_sits_in_the_plugins_header_beside_add_plugin() {
+    let data = Data::temp();
+    let (_app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| w.show_plugins("", &[], window, cx));
+    window.draw();
+    let check = crate::ui::spot_at("plugin-check-updates").unwrap();
+    let add = crate::ui::spot_at("plugin-add").unwrap();
+    assert_eq!(check.center().y, add.center().y, "one row with the title");
+    assert!(check.right() <= add.left());
+}
+
 fn runs(window: &TestAppWindow<Workspace>, id: &str) -> bool {
     window.read(|w, _| w.plugin_runs(id) && w.plugin_env.running.builtin(id).is_some())
 }

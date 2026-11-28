@@ -361,7 +361,7 @@ impl Workspace {
         let mut recovery = FocusRecovery::default();
         recovery.open(&focus, window, cx);
         self.settings = Some(SettingsDialog {
-            section: Section::Text,
+            section: Section::General,
             focus,
             recovery,
             family,

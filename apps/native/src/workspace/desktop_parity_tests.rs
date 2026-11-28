@@ -210,6 +210,15 @@ fn the_plugins_section_lists_the_plugins_and_writes_plugins_json_only_for_a_chan
             ("Plugin new".into(), "Waiting for approval".into()),
         ]
     );
+    assert!(
+        window.read(|w, _| matches!(w.settings.as_ref().unwrap().section, settings::Section::General)),
+        "Settings opens on its first section"
+    );
+    assert_eq!(
+        window.read(|w, _| w.plugin_views().iter().map(|view| w.plugin_note(view)).collect::<Vec<_>>()),
+        ["Runs here", "", ""],
+        "a row says on or off once, in its switch"
+    );
     window.update(|w, _, cx| {
         w.settings.as_mut().unwrap().section = settings::Section::Plugins;
         cx.notify();

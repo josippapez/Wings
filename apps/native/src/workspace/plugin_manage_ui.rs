@@ -455,6 +455,15 @@ impl Workspace {
         }
     }
 
+    /// What a row without a description says: the part of `plugin_status` after the state, which the switch and the word
+    /// beside the name already say.
+    pub(super) fn plugin_note(&self, view: &PluginView) -> String {
+        self.plugin_status(view)
+            .split_once(" · ")
+            .map(|(_, note)| note.to_owned())
+            .unwrap_or_default()
+    }
+
     pub(super) fn plugins_section(&self, content_w: f32, cx: &mut Context<Self>) -> AnyElement {
         if self.settings.is_none() {
             return div().into_any_element();
@@ -525,6 +534,7 @@ impl Workspace {
                 }),
         ))
         .aria_expanded(manage.menu == Some(PluginMenu::Add))
+        .children(ui::spot(|| "plugin-add".into()))
         .child(track(manage.menu_bounds.clone(), "add".into()))
         .when(!installing, |button| {
             button.on_click(cx.listener(|this, _, _, cx| {
@@ -532,12 +542,47 @@ impl Workspace {
                 cx.notify_workspace();
             }))
         });
+        let actions = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                header_button(
+                    "plugin-check-updates",
+                    "Check for updates".into(),
+                    Icon::RefreshCw,
+                    manage.checking,
+                )
+                .children(ui::spot(|| "plugin-check-updates".into()))
+                .when(!manage.checking, |button| {
+                    button.on_click(cx.listener(|this, _, _, cx| this.check_plugin_updates(true, cx)))
+                }),
+            )
+            .when(tab != PluginsTab::Browse && !updatable.is_empty(), |row| {
+                let ids = updatable.clone();
+                row.child(
+                    header_button(
+                        "plugin-update-all",
+                        format!("Update all ({})", updatable.len()).into(),
+                        Icon::CircleArrowUp,
+                        updating,
+                    )
+                    .children(ui::spot(|| "plugin-update-all".into()))
+                    .when(!updating, |button| {
+                        button.on_click(cx.listener(move |this, _, window, cx| {
+                            this.update_plugins(ids.clone(), window, cx)
+                        }))
+                    }),
+                )
+            })
+            .child(add);
         let header = Self::page_header(
             div()
                 .text_size(px(15.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("Plugins"),
-            add,
+            actions,
         );
 
         let link_card = manage.adding_link.then(|| {
@@ -608,42 +653,6 @@ impl Workspace {
                     .w(px(220.0))
                     .flex_none()
                     .child(ui::search_box(dialog.search.clone(), None)),
-            )
-            .child(
-                div()
-                    .ml_auto()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(
-                        header_button(
-                            "plugin-check-updates",
-                            "Check for updates".into(),
-                            Icon::RefreshCw,
-                            manage.checking,
-                        )
-                        .children(ui::spot(|| "plugin-check-updates".into()))
-                        .when(!manage.checking, |button| {
-                            button.on_click(cx.listener(|this, _, _, cx| this.check_plugin_updates(true, cx)))
-                        }),
-                    )
-                    .when(tab != PluginsTab::Browse && !updatable.is_empty(), |row| {
-                        let ids = updatable.clone();
-                        row.child(
-                            header_button(
-                                "plugin-update-all",
-                                format!("Update all ({})", updatable.len()).into(),
-                                Icon::CircleArrowUp,
-                                updating,
-                            )
-                            .children(ui::spot(|| "plugin-update-all".into()))
-                            .when(!updating, |button| {
-                                button.on_click(cx.listener(move |this, _, window, cx| {
-                                    this.update_plugins(ids.clone(), window, cx)
-                                }))
-                            }),
-                        )
-                    }),
             );
 
         let rows: Vec<AnyElement> = if tab == PluginsTab::Browse {
@@ -825,7 +834,7 @@ impl Workspace {
         let runs = self.plugin_runs(&id);
         let (word, tone) = status_word(view.approved, view.enabled, runs, manage.updates.get(&id).map(String::as_str));
         let about = match view.manifest.description.trim() {
-            "" => self.plugin_status(&view),
+            "" => self.plugin_note(&view),
             description => description.to_owned(),
         };
         // What went wrong with its switch shows in place of the description, where the row doesn't change height.
@@ -859,7 +868,8 @@ impl Workspace {
             .child(Self::row_words(
                 view.manifest.name.clone(),
                 view.manifest.version.clone(),
-                Some((word, tone)),
+                // The switch beside it says on or off.
+                (!matches!(word.as_str(), "On" | "Off")).then_some((word, tone)),
                 about,
             ))
             .child(self.action_slot("plugin-row", index, &view, cx))
