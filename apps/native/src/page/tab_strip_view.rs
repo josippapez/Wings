@@ -21,6 +21,8 @@ use crate::{
 const MAX_TAB: f32 = 200.0;
 /// A tab never narrower than this: past it the strip scrolls.
 const MIN_TAB: f32 = 72.0;
+/// A group's label never narrower than this.
+const MIN_LABEL: f32 = 48.0;
 /// The strip's height, and a tab's inside it.
 const STRIP_HEIGHT: f32 = 32.0;
 const TAB_HEIGHT: f32 = 28.0;
@@ -199,7 +201,10 @@ impl PageView {
             .aria_label(format!("{name}, group of {} tabs, {state}", group.count))
             .aria_expanded(!group.collapsed)
             .tooltip(ui::tooltip(name, None))
-            .flex_none()
+            // Shrinks with the tabs when the strip fills, down to a few letters of its name: kept whole, a long name left
+            // the tabs around it three letters each.
+            .flex_shrink(1.0)
+            .min_w(px(MIN_LABEL))
             .max_w(px(160.0))
             .h(px(20.0))
             .px(px(8.0))

@@ -128,6 +128,22 @@ fn a_click_on_a_groups_label_reaches_the_page_with_its_id() {
     settle(&app, &mut window, shows(r#"Heard 1:onGroup {"id":"g1"}."#));
 }
 
+/// A group with a long name gives up room with the tabs when the strip fills, so neither is squeezed to a few letters
+/// while the other keeps its full width.
+#[test]
+fn a_long_groups_label_shrinks_with_the_tabs() {
+    let mut label = group("g1", false, 6);
+    label["props"]["name"] = "Write the API docs for the billing service".into();
+    let items = std::iter::once(label).chain((1..=6).map(|n| grouped(n, "g1"))).collect();
+    let (app, mut window) = open_narrow(page(items), 640.0);
+    settle(&app, &mut window, shows("Heard nothing."));
+    draws(&app, &mut window);
+    let (_, items, _) = bounds(&mut window);
+    assert_eq!(items.len(), 7);
+    assert!(items[0].size.width < px(150.0), "the label shrank: {items:?}");
+    assert!(items[1..].iter().all(|tab| tab.size.width > px(80.0)), "the tabs kept room: {items:?}");
+}
+
 /// A collapsed group shows only its label.
 #[test]
 fn a_collapsed_group_draws_its_label_and_none_of_its_tabs() {
