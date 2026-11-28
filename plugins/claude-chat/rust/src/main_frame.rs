@@ -183,7 +183,7 @@ mod tests {
         let none = HashSet::new();
         let named = json!({ "id": "s1", "title": "Fix the build", "firstPrompt": "ignored", "gitBranch": "main", "lastActiveMs": now - 2.0 * 3_600_000.0 });
         let row = chat_row(&named, "/repo", &none, now).unwrap();
-        assert_eq!((row["label"].as_str(), row["detail"].as_str()), (Some("Fix the build"), Some("2 h ago · main")));
+        assert_eq!((row["label"].as_str(), row["detail"].as_str()), (Some("Fix the build"), Some("2 hours ago · main")));
         assert_eq!(row["open"], json!({ "view": "chat", "args": { "resume": "s1", "cwd": "/repo" } }));
         assert_eq!(row["badge"], Value::Null);
         // No title: the first prompt's first line, cut.

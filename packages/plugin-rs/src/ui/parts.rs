@@ -140,6 +140,8 @@ pub mod icons {
     pub const CHEVRON_LEFT: [&str; 1] = ["m15 18-6-6 6-6"];
     pub const CHEVRON_UP: [&str; 1] = ["m18 15-6-6-6 6"];
     pub const CHEVRON_DOWN: [&str; 1] = ["m6 9 6 6 6-6"];
+    /// `corner-down-right`: an elbow arrow, marking a child under its parent.
+    pub const CORNER_DOWN_RIGHT: [&str; 2] = ["m15 10 5 5-5 5", "M4 4v7a4 4 0 0 0 4 4h12"];
     pub const FOLDER_OPEN: [&str; 1] = ["m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"];
     pub const SQUARE_TERMINAL: [&str; 3] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "m7 11 2-2-2-2", "M11 13h4"];
     /// `settings`: the cog.

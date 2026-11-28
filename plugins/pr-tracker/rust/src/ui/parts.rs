@@ -104,8 +104,8 @@ mod tests {
     #[test]
     fn a_check_queued_for_long_says_it_is_queued_and_a_fresh_one_says_how_long_ago() {
         let now = 1_800_000_000_000.0;
-        assert_eq!(queued_ago(now - 3_600_000.0, now), "queued 1 h");
-        assert_eq!(queued_ago(now - 20.0 * 60_000.0, now), "queued 20 min");
-        assert_eq!(queued_ago(now - 5.0 * 60_000.0, now), "5 min ago");
+        assert_eq!(queued_ago(now - 3_600_000.0, now), "queued 1 hour");
+        assert_eq!(queued_ago(now - 20.0 * 60_000.0, now), "queued 20 minutes");
+        assert_eq!(queued_ago(now - 5.0 * 60_000.0, now), "5 minutes ago");
     }
 }

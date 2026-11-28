@@ -103,17 +103,20 @@ pub fn ago_now(ms: f64) -> String {
     ago(ms, host::now())
 }
 
-/// How long ago `ms` was at `now`: "just now", "5 min ago", "3 h ago", "2 d ago", and its day once a month has passed.
+/// How long ago `ms` was at `now`, as the app writes it: "just now", "1 minute ago", "5 minutes ago", "1 hour ago",
+/// "3 hours ago", "yesterday", "2 days ago", and its day once a month has passed.
 pub fn ago(ms: f64, now: f64) -> String {
     let minutes = ((now - ms) / 60_000.0).round().max(0.0);
+    let unit = |n: f64, name: &str| format!("{n} {name}{} ago", if n == 1.0 { "" } else { "s" });
     if minutes < 1.0 {
         "just now".into()
     } else if minutes < 60.0 {
-        format!("{minutes} min ago")
+        unit(minutes, "minute")
     } else if minutes < 1440.0 {
-        format!("{} h ago", (minutes / 60.0).round())
+        unit((minutes / 60.0).round().min(23.0), "hour")
     } else if minutes < 43_200.0 {
-        format!("{} d ago", (minutes / 1440.0).round())
+        let days = (minutes / 1440.0).round();
+        if days <= 1.0 { "yesterday".into() } else { unit(days, "day") }
     } else {
         day(ms)
     }
@@ -130,7 +133,8 @@ mod tests {
         assert_eq!([basename("/Users/me/repo/"), basename("repo"), basename("/")], ["repo", "repo", "/"]);
         let now = 1_800_000_000_000.0;
         let minutes = |n: f64| ago(now - n * 60_000.0, now);
-        assert_eq!([minutes(0.2), minutes(5.0), minutes(90.0), minutes(60.0 * 50.0)], ["just now", "5 min ago", "2 h ago", "2 d ago"]);
+        assert_eq!([minutes(0.2), minutes(5.0), minutes(90.0), minutes(60.0 * 50.0)], ["just now", "5 minutes ago", "2 hours ago", "2 days ago"]);
+        assert_eq!([minutes(1.0), minutes(60.0), minutes(60.0 * 24.0), minutes(60.0 * 23.9)], ["1 minute ago", "1 hour ago", "yesterday", "23 hours ago"]);
         // 2026-11-12T10:00:00Z, read in UTC as the tests' clock is.
         assert_eq!(day(1_794_477_600_000.0), "Nov 12, 2026");
         assert_eq!(ago(1_794_477_600_000.0 - 86_400_000.0 * 400.0, 1_794_477_600_000.0), "Oct 8, 2025");

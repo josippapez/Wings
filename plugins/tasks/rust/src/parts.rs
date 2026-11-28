@@ -176,7 +176,7 @@ pub fn status_summary(issues: &[Issue]) -> Node {
         .child(chip(format!("{} done", count(Status::Done)), Some("success")))
 }
 
-/// The time an issue changed, "Updated 5 min ago".
+/// The time an issue changed, "Updated 5 minutes ago".
 pub fn when(prefix: &str, ms: f64) -> String {
     format!("{prefix}{}", ago_now(ms))
 }

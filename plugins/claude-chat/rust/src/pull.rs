@@ -141,7 +141,7 @@ pub fn parse(text: &str) -> Load {
     }
 }
 
-/// "AI guardrail PR check · queued 1 h": a pending check and for how long, at `now`.
+/// "AI guardrail PR check · queued 1 hour": a pending check and for how long, at `now`.
 pub fn pending_text(check: &Pending, now: f64) -> String {
     let word = if check.running { "running" } else { "queued" };
     match check.since {
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(pr.checks, (3, 0, 0, 1));
         assert_eq!(pr.pending.len(), 2, "one with no name is skipped");
         let hour = 1_000_000.0 + 3_600_000.0;
-        assert_eq!(pending_text(&pr.pending[0], hour), "AI guardrail PR check · queued 1 h");
+        assert_eq!(pending_text(&pr.pending[0], hour), "AI guardrail PR check · queued 1 hour");
         assert_eq!(pending_text(&pr.pending[0], 1_000_000.0), "AI guardrail PR check · queued <1 min");
         assert_eq!(pending_text(&pr.pending[1], hour), "e2e · running");
     }
