@@ -11,6 +11,8 @@ pub struct Download {
     /// The tab whose view started it, and that tab's group then: none for the person's own.
     pub tab: String,
     pub group: Option<String>,
+    /// Its tab showed a site signed in with imported cookies then, so an agent hears only the origin of its address.
+    pub imported: bool,
 }
 
 #[derive(Default)]
@@ -21,14 +23,14 @@ pub struct Downloads {
 }
 
 impl Downloads {
-    /// What a view of `tab` (in `group`) says of a download: a new one goes first, one already listed changes where it is.
-    /// True for a new one.
-    pub fn heard(&mut self, tab: &str, group: Option<&str>, event: WebDownload) -> bool {
+    /// What a view of `tab` (in `group`, `imported` when it shows a site signed in with imported cookies) says of a
+    /// download: a new one goes first, one already listed changes where it is. True for a new one.
+    pub fn heard(&mut self, tab: &str, group: Option<&str>, imported: bool, event: WebDownload) -> bool {
         if let Some(known) = self.list.iter_mut().find(|known| known.event.id == event.id) {
             known.event = event;
             return false;
         }
-        self.list.insert(0, Download { event, tab: tab.to_owned(), group: group.map(str::to_owned) });
+        self.list.insert(0, Download { event, tab: tab.to_owned(), group: group.map(str::to_owned), imported });
         while self.list.len() > KEPT {
             match self.list.iter().rposition(|download| download.event.state != "progress") {
                 Some(at) => drop(self.list.remove(at)),
@@ -97,9 +99,9 @@ mod tests {
     #[test]
     fn a_download_is_listed_once_newest_first_and_changes_in_place() {
         let mut downloads = Downloads::default();
-        assert!(downloads.heard("t1", None, event(1, "progress")));
-        assert!(downloads.heard("t2", Some("ses-a"), event(2, "progress")));
-        assert!(!downloads.heard("t1", None, event(1, "done")), "the same download again");
+        assert!(downloads.heard("t1", None, false, event(1, "progress")));
+        assert!(downloads.heard("t2", Some("ses-a"), false, event(2, "progress")));
+        assert!(!downloads.heard("t1", None, false, event(1, "done")), "the same download again");
         let ids: Vec<(u64, &str)> = downloads.list.iter().map(|download| (download.event.id, download.event.state.as_str())).collect();
         assert_eq!(ids, [(2, "progress"), (1, "done")]);
         assert_eq!(downloads.running(), 1);
@@ -111,15 +113,15 @@ mod tests {
     #[test]
     fn clearing_keeps_the_ones_under_way_and_the_list_is_bounded() {
         let mut downloads = Downloads { open: true, ..Downloads::default() };
-        downloads.heard("t1", None, event(1, "done"));
-        downloads.heard("t1", None, event(2, "progress"));
+        downloads.heard("t1", None, false, event(1, "done"));
+        downloads.heard("t1", None, false, event(2, "progress"));
         downloads.clear();
         assert_eq!((downloads.list.len(), downloads.open), (1, true));
-        downloads.heard("t1", None, event(2, "failed"));
+        downloads.heard("t1", None, false, event(2, "failed"));
         downloads.clear();
         assert_eq!((downloads.list.len(), downloads.open), (0, false), "nothing left closes it");
         for id in 0..80 {
-            downloads.heard("t1", None, event(id, "done"));
+            downloads.heard("t1", None, false, event(id, "done"));
         }
         assert_eq!(downloads.list.len(), KEPT);
         assert_eq!(downloads.list[0].event.id, 79, "the newest stay");

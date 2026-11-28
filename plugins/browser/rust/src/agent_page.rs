@@ -275,7 +275,8 @@ fn origin_of(url: &str) -> String {
 fn downloads(key: &str) -> Value {
     with(|page| {
         let list = page.downloads.of(key).into_iter().map(|download| {
-            let imported = page.tabs.get(&download.tab).is_some_and(|tab| tab.state.imported);
+            // As its tab was when it began, or is now: a closed tab doesn't show the agent the whole address.
+            let imported = download.imported || page.tabs.get(&download.tab).is_some_and(|tab| tab.state.imported);
             let event = &download.event;
             json!({
                 "name": event.name, "path": event.path, "state": event.state, "received": event.received, "total": event.total,
@@ -1065,14 +1066,18 @@ mod tests {
         navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
         let download = |id: u64, url: &str| wings_plugin::ui::WebDownload { id, url: url.into(), name: format!("f{id}.pdf"), path: format!("/Users/me/Downloads/f{id}.pdf"), state: "done".into(), received: 5, total: Some(5), error: None };
         with(|page| {
-            page.downloads.heard("t1", None, download(1, "https://mine.com/private.pdf"));
-            page.downloads.heard("t2", Some("ses-a"), download(2, "https://a.com/report.pdf?token=1"));
+            page.downloads.heard("t1", None, false, download(1, "https://mine.com/private.pdf"));
+            page.downloads.heard("t2", Some("ses-a"), false, download(2, "https://a.com/report.pdf?token=1"));
         });
         let heard = run_op(json!({ "op": "downloads", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
         assert_eq!(heard, json!([{ "name": "f2.pdf", "path": "/Users/me/Downloads/f2.pdf", "state": "done", "received": 5, "total": 5, "error": null, "url": "https://a.com/report.pdf?token=1", "tab": "t2" }]));
         with(|page| page.tabs.get_mut("t2").unwrap().state.imported = true);
         let heard = run_op(json!({ "op": "downloads", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
         assert_eq!(heard[0]["url"], "https://a.com", "only the origin on a site signed in with imported cookies");
+        // Begun on such a site, it stays that way once its tab is gone.
+        with(|page| page.downloads.heard("t9", Some("ses-a"), true, download(3, "https://b.com/secret.pdf?token=2")));
+        let heard = run_op(json!({ "op": "downloads", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
+        assert_eq!(heard[0]["url"], "https://b.com");
         with(|page| page.tabs.get_mut("t2").unwrap().blocked = Some("https://ads.example/x?y".into()));
         let status = run_op(json!({ "op": "status", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
         assert_eq!(status["blockedPopup"], "https://ads.example");

@@ -157,9 +157,15 @@ impl PageView {
             Heard::Blocked { url } => (handlers?.popup.clone(), serde_json::json!({ "url": url, "blocked": true })),
             Heard::Closed => (handlers?.close.clone(), serde_json::Value::Null),
             Heard::Download(report) => {
-                let own = handlers.and_then(|handlers| handlers.download.clone());
-                let any = || self.web_handlers.values().find_map(|handlers| handlers.download.clone());
-                (own.or_else(any), serde_json::to_value(&report).unwrap_or_default())
+                let mut payload = serde_json::to_value(&report).unwrap_or_default();
+                match handlers.and_then(|handlers| handlers.download.clone()) {
+                    Some(own) => (Some(own), payload),
+                    // The view hearing it isn't the one that started it: the page keeps it only if it heard of it before.
+                    None => {
+                        payload["rerouted"] = serde_json::Value::Bool(true);
+                        (self.web_handlers.values().find_map(|handlers| handlers.download.clone()), payload)
+                    }
+                }
             }
         };
         Some((handler?, payload))

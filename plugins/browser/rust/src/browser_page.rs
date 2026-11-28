@@ -498,11 +498,16 @@ fn popup_opened(opener: &str, popup: WebPopup) {
     }
 }
 
-/// A view of `tab` told how a download goes: a new one the person started opens the list under the page.
-fn downloaded(tab: &str, event: WebDownload) {
+/// A view of `tab` told how a download goes: a new one the person started opens the list under the page. One `rerouted`
+/// (Wings handed it to this view as the one that started it is gone) is kept only if the page heard of it before, so a
+/// download is never put in another tab's or agent's list.
+fn downloaded(tab: &str, event: WebDownload, rerouted: bool) {
     with(|page| {
-        let group = page.tabs.get(tab).and_then(|tab| tab.group.clone());
-        if page.downloads.heard(tab, group.as_deref(), event) && group.is_none() {
+        if rerouted && !page.downloads.list.iter().any(|known| known.event.id == event.id) {
+            return;
+        }
+        let (group, imported) = page.tabs.get(tab).map_or((None, false), |tab| (tab.group.clone(), tab.state.imported));
+        if page.downloads.heard(tab, group.as_deref(), imported, event) && group.is_none() {
             page.downloads.open = true;
         }
     });
@@ -712,7 +717,7 @@ fn web(tab: &Tab, shown: bool, keep: bool) -> Node {
         .on("onResult", move |event| result_event(&result_id, event))
         .on("onPopup", move |event| popup_opened(&popup_id, WebPopup::from_event(event)))
         .on("onClose", move |_| close_tab(&close_id))
-        .on("onDownload", move |event| downloaded(&download_id, WebDownload::from_event(event)));
+        .on("onDownload", move |event| downloaded(&download_id, WebDownload::from_event(event), event["rerouted"] == true));
     if let Some(popup) = tab.popup {
         web = web.prop("popup", popup);
     }
@@ -1202,6 +1207,29 @@ mod tests {
         assert!(handlers.call(&on_download, &json!({ "id": 1, "url": "https://a.example/x.zip", "name": "x.zip", "path": "/Users/me/Downloads/x.zip", "state": "progress", "received": 1, "total": null })));
         assert!(with(|page| page.downloads.list.len() == 1 && !page.downloads.open));
         assert_eq!(with(|page| page.downloads.of("ses-a").len()), 1);
+    }
+
+    /// A download Wings hands to another view because its own is gone is kept only if the page heard of it from its own
+    /// view first: it never lands in another tab's or agent's list. Whether its tab showed a site signed in with imported
+    /// cookies is kept with it, so closing the tab doesn't show an agent its whole address.
+    #[test]
+    fn a_rerouted_download_is_kept_only_if_known_and_keeps_whether_its_tab_was_signed_in_with_imported_cookies() {
+        only(Some("https://app.example/"));
+        let agent = with(|page| page.tabs.open(Some(("ses-a", "A")), Some("https://a.example/")));
+        with(|page| page.tabs.get_mut(&agent).unwrap().state.imported = true);
+        let event = |id: u64, state: &str| json!({ "id": id, "url": "https://a.example/private/report.pdf?token=1", "name": "report.pdf", "path": "/Users/me/Downloads/report.pdf", "state": state, "received": 1, "total": null });
+        let (agents, handlers) = view_handler(&agent, "onDownload");
+        assert!(handlers.call(&agents, &event(1, "progress")));
+        let (persons, handlers) = view_handler("t1", "onDownload");
+        let mut rerouted = event(2, "progress");
+        rerouted["rerouted"] = json!(true);
+        assert!(handlers.call(&persons, &rerouted));
+        assert_eq!(with(|page| page.downloads.list.len()), 1, "an unknown one another view hands on is dropped");
+        let mut later = event(1, "done");
+        later["rerouted"] = json!(true);
+        assert!(handlers.call(&persons, &later));
+        assert!(with(|page| page.downloads.list[0].event.state == "done" && page.downloads.list[0].group.as_deref() == Some("ses-a")), "a known one goes on, still the agent's");
+        assert!(with(|page| page.downloads.list[0].imported));
     }
 
     #[test]

@@ -676,12 +676,26 @@ fn a_window_a_page_opens_is_the_view_its_engine_made_which_the_page_takes_with_w
     let report = |id: u64| Report { id, url: "https://app.example/report.pdf".into(), name: "report.pdf".into(), path: "/Users/me/Downloads/report.pdf".into(), state: "progress", received: 10, total: Some(100), error: None };
     opener.tell(Heard::Download(report(1)));
     until(&app, &mut window, "the page never heard its download", |_| data.saved("browser", "browser-scope", "download1").is_some_and(|heard| heard["state"] == "progress" && heard["total"] == 100));
+    assert!(data.saved("browser", "browser-scope", "download1").unwrap().get("rerouted").is_none(), "its own view's");
 
     popup.tell(Heard::Closed);
     until(&app, &mut window, "the page never heard its window close", |_| data.saved("browser", "browser-scope", "pop-closed") == Some(json!(true)));
     settle(&app, &mut window);
     popup.tell(Heard::Download(report(2)));
     until(&app, &mut window, "a download of a closed view went unheard", |_| data.saved("browser", "browser-scope", "download2").is_some());
+    // Marked, so the page doesn't take another view's word for whose download it is.
+    assert_eq!(data.saved("browser", "browser-scope", "download2").unwrap()["rerouted"], json!(true));
+
+    // A file Wings can't mark as from the web (here: gone before it was marked) doesn't count as downloaded: macOS wouldn't
+    // check it before it opens.
+    let profile = crate::web::Profile::of("browser", "browser-scope", &std::env::temp_dir().join("wings-web-tests-storage"));
+    let (id, _) = crate::web::downloads::begin(&opener, &profile, "https://app.example/tool.dmg", "https://app.example/", "tool.dmg", std::rc::Rc::new(|| {})).expect("a download");
+    crate::web::downloads::finished(id, Some(std::env::temp_dir().join("wings-web-tests-gone").join("tool.dmg")));
+    let key = format!("download{id}");
+    until(&app, &mut window, "an unmarked download was never reported", |_| data.saved("browser", "browser-scope", &key).is_some_and(|heard| heard["state"] != "progress"));
+    let heard = data.saved("browser", "browser-scope", &key).unwrap();
+    assert_eq!(heard["state"], "failed", "{heard}");
+    assert!(heard["error"].as_str().unwrap().contains("mark the file as downloaded from the web"), "{heard}");
 
     // A second window it never takes ends with the page.
     open_popup(&opener, &did, "https://elsewhere.example/");

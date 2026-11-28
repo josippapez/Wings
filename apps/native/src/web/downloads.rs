@@ -95,8 +95,9 @@ pub fn unique_path(folder: &Path, name: &str, taken: impl Fn(&Path) -> bool) -> 
 /// The most downloads one document may start, clicked or not: more is a page spamming files.
 const MOST_PER_DOCUMENT: u32 = 10;
 
-/// What downloads a view's document may start: one it starts by itself (no click or key of yours led to it) only if it
-/// is its first, as Chrome lets the first through and asks before more, and at most `MOST_PER_DOCUMENT` in all.
+/// What downloads a view's document may start: one it starts by itself (no click or key of yours led to it), as Chrome
+/// lets the first through and asks before more, and at most `MOST_PER_DOCUMENT` in all. The one by itself is the view's,
+/// not each document's, so a page that loads itself again doesn't get another: a download you start gives it one again.
 #[derive(Debug, Default)]
 pub struct Gate {
     document: u64,
@@ -109,15 +110,13 @@ impl Gate {
     /// click or key started it.
     pub fn allow(&mut self, document: u64, user: bool) -> bool {
         if self.document != document {
-            *self = Self { document, ..Self::default() };
+            *self = Self { document, all: 0, ..*self };
         }
         if self.all >= MOST_PER_DOCUMENT || (!user && self.automatic >= 1) {
             return false;
         }
         self.all += 1;
-        if !user {
-            self.automatic += 1;
-        }
+        self.automatic = if user { 0 } else { self.automatic + 1 };
         true
     }
 }
@@ -277,9 +276,10 @@ mod registry {
             Some((PathBuf::from(&entry.report.path), entry.report.url.clone(), entry.page.clone()))
         });
         let Some((path, url, page)) = marked else { return };
-        let error = quarantine(&path, &url, &page).err();
-        if let Some(why) = &error {
+        // Unmarked, macOS wouldn't check it before it opens: it doesn't stay.
+        if let Err(why) = quarantine(&path, &url, &page) {
             eprintln!("[downloads] couldn't mark a download as from the web: {why}");
+            return ended(id, "failed", Some(format!("Wings couldn't mark the file as downloaded from the web, so it was removed ({why})")));
         }
         tell(id, |report| {
             report.state = "done";
@@ -463,14 +463,17 @@ mod tests {
         }
     }
 
-    /// A page gets its first download by itself, as Chrome gives it, then only those you start, up to a document's most.
+    /// A page gets its first download by itself, as Chrome gives it, then only those you start, up to a document's most;
+    /// loading itself again doesn't give it another.
     #[test]
     fn a_page_downloads_once_by_itself_and_never_spams_files() {
         let mut gate = Gate::default();
         assert!(gate.allow(1, false), "the first one it starts by itself");
         assert!(!gate.allow(1, false), "not a second");
-        assert!(gate.allow(1, true), "one you clicked");
-        assert!(gate.allow(2, false), "a new document starts again");
+        assert!(!gate.allow(2, false), "nor in a document the page loaded itself");
+        assert!(gate.allow(2, true), "one you clicked");
+        assert!(gate.allow(2, false), "which gives it one by itself again");
+        assert!(!gate.allow(3, false));
         let mut gate = Gate::default();
         let clicked = (0..30).filter(|_| gate.allow(7, true)).count();
         assert_eq!(clicked, MOST_PER_DOCUMENT as usize, "clicked or not, a document has a most");
