@@ -5,6 +5,7 @@
 use crate::{
     address::resolve,
     agent_page,
+    downloads::{self, Download, Downloads},
     extension::{Staged, dialog_for},
     history::{self, Entry},
     settings,
@@ -17,8 +18,8 @@ use wings_plugin::{
     host::{self, Stage},
     task::spawn,
     ui::{
-        Choice, Combobox, ExtensionButton, Node, WebState, actions as dialog_actions, badge, button, combobox_submit, dialog, icon_button, icons, image, menu, muted, notice, page_with, row, slot,
-        stack, tab as strip_tab, tab_group, text, toast, web_extension_action, web_view,
+        Choice, Combobox, ExtensionButton, Node, WebDownload, WebPopup, WebState, actions as dialog_actions, badge, bar, button, combobox_submit, dialog, icon, icon_button, icons, image, menu,
+        meter, muted, notice, page_with, row, section_label, slot, small, stack, tab as strip_tab, tab_group, text, toast, web_download, web_extension_action, web_view,
     },
 };
 
@@ -40,6 +41,12 @@ pub(crate) struct Page {
     problem: Option<String>,
     /// What clearing a site did, shown over the foot of the page: its tone and words.
     cleared: Option<(&'static str, String)>,
+    /// What the tabs downloaded, and the tokens of the commands sent to a download (show it, open it, stop it), whose
+    /// refusal shows in the red line.
+    pub downloads: Downloads,
+    download_tokens: Vec<u64>,
+    /// A window the shown tab's page opened by itself, which wasn't opened: what the toast says of it.
+    blocked: Option<String>,
     /// The title last given the Wings tab, so a repeat does nothing.
     titled: String,
     /// What was last kept with the Wings tab, and whether the saved tabs have been read yet (before that nothing is kept, so
@@ -89,6 +96,7 @@ impl Page {
             tab.typed = None;
             tab.store = false;
             tab.added = None;
+            tab.blocked = None;
             effects.check_store = (new.url.starts_with("http://") || new.url.starts_with("https://")).then(|| new.url.clone());
         }
         let finished = !new.loading && new.error.is_none() && !new.url.is_empty();
@@ -242,6 +250,7 @@ pub(crate) fn close_tab(id: &str) {
 
 fn select_tab(id: &str) {
     with(|page| {
+        page.blocked = None;
         page.tabs.activate(id);
         page.tabs.touch(id, host::now());
     });
@@ -439,8 +448,21 @@ fn open_extension(id: &str) {
     });
 }
 
-/// What a tab's command came to: a refused extension button says why in the red line, and the rest are the agent's.
+/// What a tab's command came to: a refused extension button, or a download that couldn't be shown or opened, says why in
+/// the red line, and the rest are the agent's.
 fn result_event(tab: &str, event: &Value) {
+    let token = event["token"].as_u64();
+    let download = with(|page| {
+        let at = page.download_tokens.iter().position(|sent| Some(*sent) == token)?;
+        page.download_tokens.remove(at);
+        if let Some(error) = event["error"].as_str() {
+            page.problem = Some(error.to_owned());
+        }
+        Some(())
+    });
+    if download.is_some() {
+        return;
+    }
     let refused = with(|page| {
         let mine = page.tabs.get(tab).is_some_and(|tab| tab.opening.is_some() && event["token"].as_u64() == tab.opening);
         let error = event["error"].as_str().filter(|_| mine).map(str::to_owned);
@@ -452,6 +474,127 @@ fn result_event(tab: &str, event: &Value) {
     if !refused {
         agent_page::result(event);
     }
+}
+
+/// The page of `opener` opened a window: a tab of its own beside it, or for one it opened by itself, which wasn't opened,
+/// a toast when the person is looking at that page.
+fn popup_opened(opener: &str, popup: WebPopup) {
+    if popup.blocked {
+        with(|page| {
+            let site = page.tabs.get(opener).and_then(|tab| site_name(&tab.state.url));
+            if let Some(tab) = page.tabs.get_mut(opener) {
+                tab.blocked = Some(popup.url.clone());
+            }
+            if page.tabs.active == opener {
+                let from = site.map_or_else(String::new, |site| format!(" from {site}"));
+                page.blocked = Some(format!("Blocked a pop-up{from} that opened without a click. Click its link or button to open it."));
+            }
+        });
+        agent_page::changed();
+        return;
+    }
+    if with(|page| page.tabs.open_from(opener, &popup.url, popup.popup, popup.background)).is_some() {
+        tabs_changed();
+    }
+}
+
+/// A view of `tab` told how a download goes: a new one the person started opens the list under the page.
+fn downloaded(tab: &str, event: WebDownload) {
+    with(|page| {
+        let group = page.tabs.get(tab).and_then(|tab| tab.group.clone());
+        if page.downloads.heard(tab, group.as_deref(), event) && group.is_none() {
+            page.downloads.open = true;
+        }
+    });
+}
+
+/// Shows a download in Finder, opens it or stops it, by a command to its tab's view or, with that tab gone, another's:
+/// Wings acts on it whichever view carries the command.
+fn act_on_download(tab: &str, id: u64, action: &'static str) {
+    with(|page| {
+        let has_view = |tab: &Tab| !tab.blank;
+        let via = page.tabs.get(tab).filter(|tab| has_view(tab)).or_else(|| page.tabs.list.iter().find(|tab| has_view(tab))).map(|tab| tab.id.clone());
+        let Some(via) = via else {
+            page.problem = Some("Open a page in a tab first: the download is acted on through it.".into());
+            return;
+        };
+        page.problem = None;
+        if let Some(token) = page.tabs.run(&via, |token| web_download(action, id, token)) {
+            page.download_tokens.push(token);
+        }
+    });
+}
+
+/// The toolbar's button that shows and hides the downloads, with how many are under way: none before the page downloads.
+fn downloads_button(page: &Page) -> Option<Node> {
+    if page.downloads.list.is_empty() {
+        return None;
+    }
+    let running = page.downloads.running();
+    let label = match running {
+        0 => "Downloads".to_owned(),
+        n => format!("Downloads, {n} under way"),
+    };
+    let glyph = icon(24, 2.0, &icons::DOWNLOAD).prop("size", 16);
+    let button = Node::new("Button")
+        .prop("variant", "ghost")
+        .prop("label", label.as_str())
+        .prop("title", if page.downloads.open { "Hide downloads" } else { "Show downloads" })
+        .on("onClick", |_| with(|page| page.downloads.open = !page.downloads.open))
+        .key("downloads");
+    Some(match running {
+        0 => button.prop("size", "icon-sm").child(glyph),
+        n => button.prop("size", "sm").child(row().prop("gap", "s").prop("align", "center").child(glyph).child(badge(n.to_string(), Some("info")))),
+    })
+}
+
+/// How many downloads the list under the page shows, newest first.
+const DOWNLOADS_SHOWN: usize = 4;
+
+/// The list of downloads under the page, while it is open: each with its name, how far it is, and what can be done to it.
+fn downloads_list(page: &Page) -> Option<Node> {
+    if !page.downloads.open || page.downloads.list.is_empty() {
+        return None;
+    }
+    let head = row()
+        .prop("gap", "s")
+        .prop("align", "center")
+        .child(stack().prop("grow", true).child(section_label(format!("Downloads · {}", page.downloads.list.len()))))
+        .child(button("Clear", "ghost", false, || with(|page| page.downloads.clear())).size("sm").tooltip("Take the finished ones off the list"))
+        .child(icon_button("Hide downloads", &icons::CLOSE, || with(|page| page.downloads.open = false)));
+    let more = page.downloads.list.len().saturating_sub(DOWNLOADS_SHOWN);
+    let list = stack()
+        .prop("gap", "s")
+        .child(head)
+        .children(page.downloads.list.iter().take(DOWNLOADS_SHOWN).map(download_row))
+        .maybe((more > 0).then(|| muted(format!("{more} more, in ~/Downloads")).prop("size", "small")));
+    Some(bar("top", [list]).key("downloads"))
+}
+
+fn download_row(download: &Download) -> Node {
+    let event = &download.event;
+    let (id, tab) = (event.id, download.tab.clone());
+    let name = if event.name.is_empty() { event.url.clone() } else { event.name.clone() };
+    let tone = if matches!(event.state.as_str(), "failed" | "blocked") { "danger" } else { "muted" };
+    let words = stack()
+        .prop("grow", true)
+        .prop("gap", "xs")
+        .child(text(name.as_str()).prop("weight", "medium").prop("truncate", true).prop("title", if event.path.is_empty() { event.url.as_str() } else { event.path.as_str() }))
+        .child(small(downloads::status(event)).prop("tone", tone));
+    let progress = match (event.state.as_str(), event.total) {
+        ("progress", Some(total)) if total > 0 => Some(stack().prop("width", 120).child(meter(&format!("{name} downloading"), (event.received * 100 / total) as f64, Some("info")))),
+        _ => None,
+    };
+    let act = move |action: &'static str| {
+        let tab = tab.clone();
+        move || act_on_download(&tab, id, action)
+    };
+    let buttons: Vec<Node> = match event.state.as_str() {
+        "progress" => vec![icon_button("Stop downloading", &icons::CLOSE, act("cancel"))],
+        "done" => vec![button("Open", "ghost", false, act("open")).size("sm").tooltip("Open it in its app"), icon_button("Show in Finder", &icons::FOLDER_OPEN, act("reveal"))],
+        _ => Vec::new(),
+    };
+    row().prop("gap", "m").prop("align", "center").key(format!("download-{id}")).child(words).maybe(progress).children(buttons)
 }
 
 /// An extension's button in the toolbar: its icon, with its badge beside it as a count is on a header button, and its
@@ -559,14 +702,20 @@ fn tab_strip(page: &Page) -> Node {
 /// A tab's web view: every tab keeps its own, the shown one drawn and the others kept made and hidden, so a background tab goes
 /// on loading and an agent's tab, kept live too, can be read and shot. The key is the view's name in the page.
 fn web(tab: &Tab, shown: bool, keep: bool) -> Node {
-    let (state_id, result_id) = (tab.id.clone(), tab.id.clone());
+    let (state_id, result_id, popup_id, close_id, download_id) = (tab.id.clone(), tab.id.clone(), tab.id.clone(), tab.id.clone(), tab.id.clone());
     let mut web = web_view(&format!("tab-{}", tab.id))
         .key(format!("web-{}", tab.id))
         .prop("fill", true)
         .prop("url", tab.start.as_str())
         .prop("keepData", keep)
         .on("onState", move |event| state(&state_id, WebState::from_event(event)))
-        .on("onResult", move |event| result_event(&result_id, event));
+        .on("onResult", move |event| result_event(&result_id, event))
+        .on("onPopup", move |event| popup_opened(&popup_id, WebPopup::from_event(event)))
+        .on("onClose", move |_| close_tab(&close_id))
+        .on("onDownload", move |event| downloaded(&download_id, WebDownload::from_event(event)));
+    if let Some(popup) = tab.popup {
+        web = web.prop("popup", popup);
+    }
     if !shown {
         web = web.prop("hidden", true);
     }
@@ -599,6 +748,7 @@ fn view() -> Vec<Node> {
             .prop("align", "center")
             .maybe(tab.store.then(|| button("Add to Wings", "secondary", page.busy, stage_store).size("sm")))
             .children(state.extensions.iter().map(extension_button))
+            .maybe(downloads_button(&page))
             .child(if agent_page::popped() {
                 icon_button("Put back in a tab", &icons::MINIMIZE_2, agent_page::pop_button_action)
             } else {
@@ -615,18 +765,21 @@ fn view() -> Vec<Node> {
             tab.added.as_deref().map(|added| notice("success", added).key("added")),
             agent_page::handoff_banner(),
         ];
-        let toasts = page.cleared.as_ref().map(|(tone, words)| toast(tone, words.as_str(), || with(|page| page.cleared = None)).key("cleared"));
+        let cleared = page.cleared.as_ref().map(|(tone, words)| toast(tone, words.as_str(), || with(|page| page.cleared = None)).key("cleared"));
+        let blocked = page.blocked.as_ref().map(|words| toast("warn", words.as_str(), || with(|page| page.blocked = None)).key("blocked"));
+        let toasts = cleared.into_iter().chain(blocked);
         // Every tab with a page keeps its view, whichever is shown.
         let webs = page.tabs.list.iter().filter(|other| !other.blank).map(|other| web(other, other.id == tab.id, keep));
+        let list = downloads_list(&page);
         if tab.blank {
             let servers = start_page::servers(&page.ports, &page.panes, &page.project);
             let recent = start_page::recent(&page.visited, &servers, RECENT);
             let body = start_page::view(&servers, &recent, open_from_start);
-            return vec![page_with(top.into_iter().flatten(), std::iter::once(body).chain(webs)).prop("column", START_COLUMN).toasts(toasts)];
+            return vec![page_with(top.into_iter().flatten(), std::iter::once(body).chain(webs).chain(list)).prop("column", START_COLUMN).toasts(toasts)];
         }
         let dialog = tab.staged.as_ref().map(|staged| dialog_for(staged, page.busy, page.problem.as_deref(), cancel, add));
         let ask = tab.clearing_site.as_deref().map(|url| clear_site_dialog(tab, url));
-        vec![page_with(top.into_iter().flatten(), webs.chain(dialog).chain(ask)).toasts(toasts)]
+        vec![page_with(top.into_iter().flatten(), webs.chain(list).chain(dialog).chain(ask)).toasts(toasts)]
     })
 }
 
@@ -960,6 +1113,95 @@ mod tests {
         assert_eq!(with(|page| page.problem.clone()), None);
         result_event("t1", &serde_json::json!({ "token": 1, "error": "no" }));
         assert_eq!(with(|page| page.problem.clone()), Some("no".into()));
+    }
+
+    /// The handler `name` of the web view of tab `tab` in what is drawn now, and the handlers to call it with.
+    fn view_handler(tab: &str, name: &str) -> (String, wings_plugin::ui::Handlers) {
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let found = views(&tree).into_iter().find(|view| view["props"]["name"] == format!("tab-{tab}")).unwrap_or_else(|| panic!("no view of {tab}: {tree}"));
+        (found["props"][name].as_str().unwrap_or_else(|| panic!("no {name}")).to_owned(), handlers)
+    }
+
+    /// A window a page opens with your click is a tab beside it showing the view Wings made for it, which keeps its opener;
+    /// its `window.close()` closes the tab.
+    #[test]
+    fn a_window_the_page_opens_is_a_tab_beside_it_on_the_view_wings_made_and_closing_itself_closes_it() {
+        only(Some("https://app.example/"));
+        with(|page| page.tabs.open(None, Some("https://other.example/")));
+        with(|page| page.tabs.activate("t1"));
+        let (on_popup, handlers) = view_handler("t1", "onPopup");
+        assert!(handlers.call(&on_popup, &json!({ "url": "https://login.example/authorize", "background": false, "popup": 3 })));
+        assert_eq!(with(|page| (page.tabs.order(), page.tabs.active.clone())), (vec!["t1".to_owned(), "t3".into(), "t2".into()], "t3".to_owned()));
+        let tree = wings_plugin::ui::export(view()).0;
+        let popup = views(&tree).into_iter().find(|view| view["props"]["name"] == "tab-t3").cloned().expect("the window's view");
+        assert_eq!((popup["props"]["popup"].as_u64(), popup["props"]["url"].as_str()), (Some(3), Some("https://login.example/authorize")));
+        assert!(popup["props"].get("hidden").is_none(), "it shows");
+        let (on_close, handlers) = view_handler("t3", "onClose");
+        assert!(handlers.call(&on_close, &Value::Null));
+        assert_eq!(with(|page| (page.tabs.order(), page.tabs.active.clone())), (vec!["t1".to_owned(), "t2".into()], "t1".to_owned()), "it closed itself, back to its opener");
+        // A Cmd-click opens a plain tab behind.
+        let (on_popup, handlers) = view_handler("t1", "onPopup");
+        assert!(handlers.call(&on_popup, &json!({ "url": "https://docs.example/", "background": true, "popup": null })));
+        assert_eq!(with(|page| (page.tabs.active.clone(), page.tabs.get("t4").map(|tab| (tab.popup, tab.start.clone())))), ("t1".into(), Some((None, "https://docs.example/".into()))));
+    }
+
+    /// A window a page opens by itself isn't opened: the person sees a toast while they look at that page, and nothing else
+    /// changes.
+    #[test]
+    fn a_window_opened_without_a_click_is_blocked_with_a_toast() {
+        only(Some("https://app.example/"));
+        let (on_popup, handlers) = view_handler("t1", "onPopup");
+        assert!(handlers.call(&on_popup, &json!({ "url": "https://ads.example/", "blocked": true })));
+        assert_eq!(with(|page| page.tabs.list.len()), 1);
+        let now = drawn();
+        assert!(now.contains("\"Toast\"") && now.contains("Blocked a pop-up from app.example that opened without a click."), "{now}");
+        assert_eq!(with(|page| page.tabs.get("t1").unwrap().blocked.clone()), Some("https://ads.example/".into()));
+        // The next page it goes to starts with none.
+        state("t1", loaded("https://app.example/next", "Next"));
+        assert_eq!(with(|page| page.tabs.get("t1").unwrap().blocked.clone()), None);
+    }
+
+    /// A download shows under the page with how far it is, and the toolbar has a button for the list; it is stopped, shown in
+    /// Finder or opened by a command naming it, whose refusal shows in the red line.
+    #[test]
+    fn a_download_shows_under_the_page_and_is_stopped_shown_or_opened_by_its_id() {
+        only(Some("https://app.example/"));
+        let (on_download, handlers) = view_handler("t1", "onDownload");
+        let event = |state: &str, received: u64| json!({ "id": 7, "url": "https://app.example/report.pdf", "name": "report.pdf", "path": "/Users/me/Downloads/report.pdf", "state": state, "received": received, "total": 2_600_000, "error": null });
+        assert!(handlers.call(&on_download, &event("progress", 1_200_000)));
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let now = tree.to_string();
+        for shown in ["report.pdf", "46% · 1.2 MB of 2.6 MB", "\"Meter\"", "Downloads · 1"] {
+            assert!(now.contains(shown), "{shown} is not in {now}");
+        }
+        assert!(button_named(&tree, "Downloads, 1 under way").is_some(), "the toolbar's button counts it");
+        let stop = button_named(&tree, "Stop downloading").expect("a stop button");
+        assert!(handlers.call(stop["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        assert_eq!(shown(|tab| tab.commands.last().cloned()), Some(json!({ "action": "download", "do": "cancel", "id": 7, "token": 1 })));
+        assert!(handlers.call(&on_download, &event("done", 2_600_000)));
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        assert!(tree.to_string().contains("Done · 2.6 MB") && button_named(&tree, "Downloads").is_some());
+        let reveal = button_named(&tree, "Show in Finder").expect("Show in Finder");
+        assert!(handlers.call(reveal["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        assert_eq!(shown(|tab| tab.commands.last().cloned()), Some(json!({ "action": "download", "do": "reveal", "id": 7, "token": 2 })));
+        result_event("t1", &json!({ "token": 2, "error": "The file isn't in Downloads any more" }));
+        assert_eq!(with(|page| page.problem.clone()), Some("The file isn't in Downloads any more".into()));
+        // Hidden, the list goes and the button stays.
+        let hide = button_named(&tree, "Hide downloads").expect("a hide button");
+        assert!(handlers.call(hide["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        let (tree, _) = wings_plugin::ui::export(view());
+        assert!(!tree.to_string().contains("Done · 2.6 MB") && button_named(&tree, "Downloads").is_some());
+    }
+
+    /// An agent's tab downloading doesn't put the list in front of the person.
+    #[test]
+    fn an_agents_download_does_not_open_the_list() {
+        only(Some("https://app.example/"));
+        let agent = with(|page| page.tabs.open(Some(("ses-a", "A")), Some("https://a.example/")));
+        let (on_download, handlers) = view_handler(&agent, "onDownload");
+        assert!(handlers.call(&on_download, &json!({ "id": 1, "url": "https://a.example/x.zip", "name": "x.zip", "path": "/Users/me/Downloads/x.zip", "state": "progress", "received": 1, "total": null })));
+        assert!(with(|page| page.downloads.list.len() == 1 && !page.downloads.open));
+        assert_eq!(with(|page| page.downloads.of("ses-a").len()), 1);
     }
 
     #[test]

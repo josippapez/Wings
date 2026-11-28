@@ -1045,6 +1045,10 @@ fn a_web_view_loads_only_web_addresses_and_takes_each_command_by_its_token() {
             on_result: None,
             hidden: false,
             live: false,
+            popup: None,
+            on_popup: None,
+            on_close: None,
+            on_download: None,
         }
     );
     let scripted = tree(json!([
@@ -1385,6 +1389,30 @@ fn web_go(command: serde_json::Value) -> Option<WebGo> {
     match &parsed.children[0] {
         Node::WebView(web) => web.commands.first().map(|command| command.go.clone()),
         other => panic!("not a web view: {other:?}"),
+    }
+}
+
+/// A node takes the view made for a window its page opened by the number it heard, and hears windows, closing and
+/// downloads only with a handler for each; a download command names a download and what to do, nothing else.
+#[test]
+fn a_web_view_takes_a_popups_view_hears_windows_and_downloads_and_acts_on_a_download_by_its_id() {
+    let parsed = tree(json!([
+        {"id":1,"type":"WebView","props":{"name":"tab-t2","url":"https://a.com/","popup":7,"onPopup":"1:popup","onClose":"1:close","onDownload":"1:download"}},
+        {"id":2,"type":"WebView","props":{"name":"tab-t3","popup":"7"}}
+    ]))
+    .unwrap();
+    let web = |at: usize| match &parsed.children[at] {
+        Node::WebView(web) => web.clone(),
+        other => panic!("not a web view: {other:?}"),
+    };
+    let (taken, plain) = (web(0), web(1));
+    assert_eq!((taken.popup, taken.on_popup.as_deref(), taken.on_close.as_deref(), taken.on_download.as_deref()), (Some(7), Some("1:popup"), Some("1:close"), Some("1:download")));
+    assert_eq!((plain.popup, plain.on_popup, plain.on_close, plain.on_download), (None, None, None, None), "a number only");
+    assert_eq!(web_go(json!({"action":"download","do":"reveal","id":3,"token":1})), Some(WebGo::Download { id: 3, act: WebDownload::Reveal }));
+    assert_eq!(web_go(json!({"action":"download","do":"open","id":3,"token":1})), Some(WebGo::Download { id: 3, act: WebDownload::Open }));
+    assert_eq!(web_go(json!({"action":"download","do":"cancel","id":3,"token":1})), Some(WebGo::Download { id: 3, act: WebDownload::Cancel }));
+    for refused in [json!({"action":"download","do":"delete","id":3,"token":1}), json!({"action":"download","do":"open","path":"/etc/passwd","token":1})] {
+        assert_eq!(web_go(refused.clone()), None, "{refused}");
     }
 }
 

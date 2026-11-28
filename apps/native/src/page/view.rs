@@ -357,7 +357,7 @@ pub struct PageView {
     web_profile: Option<crate::web::Profile>,
     /// Its plugin may run scripts in its web pages (`permissions.webScripts`).
     web_scripts: bool,
-    web_handlers: HashMap<SharedString, (Option<String>, Option<String>)>,
+    web_handlers: HashMap<SharedString, actions::WebHandlers>,
     web_told: Option<crate::web::Told>,
     _web_events: Option<Task<()>>,
     /// Draws the page's terminals over it, as the workspace does, for the screenshots of a page alone.

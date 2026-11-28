@@ -17,16 +17,18 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject},
 };
-use objc2_app_kit::{NSAlert, NSBitmapImageFileType, NSEvent, NSEventMask, NSResponder, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSTextField, NSView, NSWindowOrderingMode};
+use objc2_app_kit::{NSAlert, NSBitmapImageFileType, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSResponder, NSBitmapImageRep, NSImage, NSModalResponse, NSOpenPanel, NSTextField, NSView, NSWindowOrderingMode};
 use objc2_foundation::{
     NSJSONSerialization, NSJSONWritingOptions,
-    NSArray, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
+    NSArray, NSData, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain, NSHTTPCookieExpires, NSHTTPCookieName,
     NSHTTPCookiePath, NSHTTPCookieSameSitePolicy, NSHTTPCookieSameSiteLax, NSHTTPCookieSameSiteStrict,
-    NSHTTPCookieSecure, NSHTTPCookieValue, NSKeyValueChangeKey, NSKeyValueObservingOptions,
-    NSNumber, NSObjectNSKeyValueObserverRegistration, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString, NSURL, NSURLRequest, NSUUID,
+    NSHTTPCookieSecure, NSHTTPCookieValue, NSHTTPURLResponse, NSKeyValueChangeKey, NSKeyValueObservingOptions,
+    NSNumber, NSObjectNSKeyValueObserverRegistration, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSProgressReporting, NSRect, NSSize, NSString, NSURL,
+    NSURLRequest, NSURLResponse, NSUUID,
 };
 use objc2_web_kit::{
-    WKContentWorld, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKOpenPanelParameters, WKScriptMessage,
+    WKContentWorld, WKDownload, WKDownloadDelegate, WKFrameInfo, WKNavigation, WKNavigationAction, WKNavigationActionPolicy, WKNavigationResponse,
+    WKNavigationResponsePolicy, WKNavigationType, WKOpenPanelParameters, WKScriptMessage,
     WKScriptMessageHandler, WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKNavigationDelegate, WKUIDelegate, WKWebExtension, WKWebExtensionContext,
     WKWebExtensionContextPermissionStatus, WKWebExtensionController, WKWebExtensionControllerConfiguration, WKWebView,
     WKWebViewConfiguration, WKWebsiteDataRecord, WKWebsiteDataStore, WKWindowFeatures,
@@ -34,7 +36,7 @@ use objc2_web_kit::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{
-    Profile,
+    Profile, downloads,
     views::{Heard, Maker, Native, State, Tell, make_with},
 };
 use crate::page::tree::WebGo;
@@ -55,6 +57,46 @@ const OBSERVED: [&str; 5] = ["URL", "title", "loading", "canGoBack", "canGoForwa
 pub fn host_natively(window: &Window) {
     make_with(window.window_handle().window_id(), Rc::new(Engines));
     keys_follow_presses();
+    // A WebKit page's checks have the debug control too, which Chromium otherwise starts.
+    #[cfg(debug_assertions)]
+    super::chromium::debug::listen();
+}
+
+/// A press or its release `event` in a window, handed to the view under it as AppKit hands one to a key window, after
+/// Wings' monitor of presses sees it (`give_keys_to_press`): a debug build's check of a WebKit page on a locked Mac.
+#[cfg(debug_assertions)]
+pub(crate) fn debug_press(event: &NSEvent, mtm: MainThreadMarker) {
+    let Some(content) = event.window(mtm).and_then(|window| window.contentView()) else { return };
+    // SAFETY: AppKit's views, on the main thread.
+    let at = match unsafe { content.superview() } {
+        Some(frame) => frame.convertPoint_fromView(event.locationInWindow(), None),
+        None => event.locationInWindow(),
+    };
+    let Some(view) = content.hitTest(at) else { return };
+    if event.r#type() == NSEventType::LeftMouseDown {
+        give_keys_to_press(event, mtm);
+        view.mouseDown(event);
+    } else {
+        view.mouseUp(event);
+    }
+}
+
+/// The window of the WebKit page that shows, and where `x`, `y` points from its top left are in that window, for a debug
+/// build's checks to click it (`chromium::debug`).
+#[cfg(debug_assertions)]
+pub(crate) fn shown_page_point(x: f64, y: f64, mtm: MainThreadMarker) -> Option<(Retained<objc2_app_kit::NSWindow>, NSPoint)> {
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    for window in app.windows().iter() {
+        let Some(content) = window.contentView() else { continue };
+        for view in content.subviews().iter() {
+            if view.isKindOfClass(WKWebView::class()) && !view.isHidden() {
+                let height = view.bounds().size.height;
+                let inside = NSPoint::new(x, if view.isFlipped() { y } else { height - y });
+                return Some((window.clone(), view.convertPoint_toView(inside, None)));
+            }
+        }
+    }
+    None
 }
 
 /// Makes each profile's web views with the engine it chose.
@@ -84,11 +126,15 @@ fn keys_follow_presses() {
     let block = RcBlock::new(|event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
         if let Some(mtm) = MainThreadMarker::new() {
             // SAFETY: AppKit hands the event it is about to send, alive for this call.
-            give_keys_to_press(unsafe { event.as_ref() }, mtm);
+            let event = unsafe { event.as_ref() };
+            match event.r#type() {
+                NSEventType::KeyDown => note_key(event, mtm),
+                _ => give_keys_to_press(event, mtm),
+            }
         }
         event.as_ptr()
     });
-    let mask = NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown;
+    let mask = NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown | NSEventMask::KeyDown;
     // SAFETY: the block returns the event it was given. The monitor lasts as long as the app, so it is never removed.
     std::mem::forget(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &block) });
 }
@@ -105,13 +151,40 @@ fn give_keys_to_press(event: &NSEvent, mtm: MainThreadMarker) {
     // Hiding a web view that had the keyboard leaves it with the window, not GPUI's view, so whatever has it now, a
     // press outside the web views hands it to the view pressed.
     let pressed = content.hitTest(at);
-    PRESSED_WEB_VIEW.set(pressed.as_deref().and_then(web_view_of).map_or(0, |view| std::ptr::from_ref(&*view).addr()));
+    let in_view = pressed.as_deref().and_then(web_view_of).map_or(0, |view| std::ptr::from_ref(&*view).addr());
+    PRESSED_WEB_VIEW.set(in_view);
+    if in_view != 0 {
+        GESTURE.set(Some((in_view, std::time::Instant::now())));
+    }
     if let Some(pressed) = pressed
         && !in_web_view(&pressed)
         && window.firstResponder().is_none_or(|focused| !std::ptr::eq(&*focused, &**pressed))
     {
         window.makeFirstResponder(Some(&pressed));
     }
+}
+
+/// A key typed into a web view counts as your gesture in it, as a press does: Enter on a link opens it.
+fn note_key(event: &NSEvent, mtm: MainThreadMarker) {
+    let focused = event.window(mtm).and_then(|window| window.firstResponder()).and_then(|responder| responder.downcast::<NSView>().ok());
+    if let Some(view) = focused.as_deref().and_then(web_view_of) {
+        GESTURE.set(Some((std::ptr::from_ref(&*view).addr(), std::time::Instant::now())));
+    }
+}
+
+/// How long a press or a key in a web view lets its page open a window or download a file, as Chrome's transient
+/// activation lasts.
+const GESTURE_LASTS: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether your press or key in `view` came a moment ago, which a window it opens uses up (`take`), as Chrome lets one
+/// click open one window.
+fn gesture_in(view: &WKWebView, take: bool) -> bool {
+    let at = std::ptr::from_ref(view).addr();
+    let recent = GESTURE.get().is_some_and(|(of, when)| of == at && when.elapsed() < GESTURE_LASTS);
+    if recent && take {
+        GESTURE.set(None);
+    }
+    recent
 }
 
 /// Whether `view` is a web view or inside one.
@@ -138,6 +211,10 @@ thread_local! {
     /// The window of the last press, by its address, where in it, and when: an extension's popup opens under the button
     /// pressed (`actions::anchor`).
     static LAST_PRESS: std::cell::Cell<Option<(usize, NSPoint, std::time::Instant)>> = const { std::cell::Cell::new(None) };
+    /// The web view of your last press or key, by its address, and when.
+    static GESTURE: std::cell::Cell<Option<(usize, std::time::Instant)>> = const { std::cell::Cell::new(None) };
+    /// The downloads under way, whose delegates WebKit holds only weakly.
+    static DOWNLOADING: RefCell<Vec<Retained<Download>>> = RefCell::default();
 }
 
 impl WebView {
@@ -552,84 +629,104 @@ struct WebKit;
 impl Maker for WebKit {
     fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
         let mtm = MainThreadMarker::new().expect("web views are made on the main thread");
-        let shared = shared(profile, keep_data, mtm);
-        // SAFETY: WebKit's objects, made and used on the main thread.
-        let view = unsafe {
-            let configuration = WKWebViewConfiguration::new(mtm);
-            configuration.setWebsiteDataStore(&shared.store);
-            if let Some(extensions) = &shared.extensions {
-                configuration.setWebExtensionController(Some(extensions));
-            }
-            // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees, and what
-            // comes from a site signed in with imported cookies is dropped as it arrives (`heard`). It names no such site.
-            if scripts {
-                let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
-                    WKUserScript::alloc(mtm),
-                    &NSString::from_str(LOGS),
-                    WKUserScriptInjectionTime::AtDocumentStart,
-                    true,
-                    &WKContentWorld::pageWorld(mtm),
-                );
-                configuration.userContentController().addUserScript(&script);
-                // Every frame tells Wings, in a world of its own, once it holds a secret field (`guard`).
-                let watch = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
-                    WKUserScript::alloc(mtm),
-                    &NSString::from_str(guard::WATCH),
-                    WKUserScriptInjectionTime::AtDocumentEnd,
-                    false,
-                    &WKContentWorld::worldWithName(&NSString::from_str(guard::WORLD), mtm),
-                );
-                configuration.userContentController().addUserScript(&watch);
-            }
-            // `WebView` is a `WKWebView` that adds nothing but a rule for taking the keyboard.
-            let view: Retained<WebView> = msg_send![WebView::alloc(mtm), initWithFrame: NSRect::ZERO, configuration: &*configuration];
-            let view = view.into_super();
-            // So a plugin's author can look at a page with Safari's Web Inspector, in a build of their own only: a release
-            // build's pages, signed in as they may be, aren't open to it.
-            view.setInspectable(cfg!(debug_assertions));
-            view.setHidden(true);
-            view
-        };
-        let observer = Observer::new(told.clone(), profile.dir.clone(), mtm);
-        // A tab to the extensions, whose buttons the page hears.
-        if let (Some(delegate), Some(controller)) = (&shared.tabs, &shared.extensions) {
-            let tab = actions::open(delegate, controller, &view, &observer, &profile.plugin);
-            observer.ivars().tab.replace(Some(tab.clone()));
-            actions::refresh(&tab);
-        }
-        if scripts {
-            // SAFETY: the configuration's controller holds the handler until the view goes (`Drop` takes it away).
-            unsafe {
-                let contents = view.configuration().userContentController();
-                contents.addScriptMessageHandler_contentWorld_name(ProtocolObject::from_ref(&*observer), &WKContentWorld::pageWorld(mtm), &NSString::from_str(LOG_HANDLER));
-                // Only Wings' own world reaches it: the page can't say it holds no secret field, nor reach it at all.
-                contents.addScriptMessageHandler_contentWorld_name(
-                    ProtocolObject::from_ref(&*observer),
-                    &WKContentWorld::worldWithName(&NSString::from_str(guard::WORLD), mtm),
-                    &NSString::from_str(guard::HANDLER),
-                );
-            };
-        }
-        // SAFETY: the observer outlives the observing: `Drop` removes it before either goes.
-        unsafe {
-            for key in OBSERVED {
-                view.addObserver_forKeyPath_options_context(
-                    &observer,
-                    &NSString::from_str(key),
-                    NSKeyValueObservingOptions::empty(),
-                    std::ptr::null_mut(),
-                );
-            }
-            view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
-            view.setUIDelegate(Some(ProtocolObject::from_ref(&*observer)));
-        }
-        let (shots, web_dir) = (profile.dir.join("screenshots"), profile.dir.clone());
-        let mut native = WebPage { view, observer, told, shots, web_dir, scripts };
-        if let Some(url) = url {
-            native.go(&WebGo::Load(url.to_owned()), 0);
-        }
-        Box::new(native)
+        Box::new(web_page(profile, keep_data, scripts, url, told, None, mtm))
     }
+}
+
+/// A web view of `profile`'s pages at `url`: made with `given`, the configuration WebKit hands a window a page opens, which
+/// keeps its opener, or else with one of Wings' own.
+fn web_page(profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell, given: Option<&WKWebViewConfiguration>, mtm: MainThreadMarker) -> WebPage {
+    let shared = shared(profile, keep_data, mtm);
+    // SAFETY: WebKit's objects, made and used on the main thread.
+    let view = unsafe {
+        let configuration = match given {
+            // Its scripts' handlers are its own observer's, and leave with it (`Drop`): the opener's controller comes
+            // with the configuration, so the window gets one of its own.
+            Some(given) => {
+                given.setUserContentController(&WKUserContentController::new(mtm));
+                given.retain()
+            }
+            None => {
+                let configuration = WKWebViewConfiguration::new(mtm);
+                configuration.setWebsiteDataStore(&shared.store);
+                if let Some(extensions) = &shared.extensions {
+                    configuration.setWebExtensionController(Some(extensions));
+                }
+                // Every `window.open` comes to Wings, which opens only one your click or key led to (`new_window`): WebKit
+                // drops the others without a word, and a page then can't say one was blocked.
+                configuration.preferences().setJavaScriptCanOpenWindowsAutomatically(true);
+                configuration
+            }
+        };
+        // In the page's own world, the only one that sees its `console` and `fetch`; it posts what it sees, and what
+        // comes from a site signed in with imported cookies is dropped as it arrives (`heard`). It names no such site.
+        if scripts {
+            let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+                WKUserScript::alloc(mtm),
+                &NSString::from_str(LOGS),
+                WKUserScriptInjectionTime::AtDocumentStart,
+                true,
+                &WKContentWorld::pageWorld(mtm),
+            );
+            configuration.userContentController().addUserScript(&script);
+            // Every frame tells Wings, in a world of its own, once it holds a secret field (`guard`).
+            let watch = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+                WKUserScript::alloc(mtm),
+                &NSString::from_str(guard::WATCH),
+                WKUserScriptInjectionTime::AtDocumentEnd,
+                false,
+                &WKContentWorld::worldWithName(&NSString::from_str(guard::WORLD), mtm),
+            );
+            configuration.userContentController().addUserScript(&watch);
+        }
+        // `WebView` is a `WKWebView` that adds nothing but a rule for taking the keyboard.
+        let view: Retained<WebView> = msg_send![WebView::alloc(mtm), initWithFrame: NSRect::ZERO, configuration: &*configuration];
+        let view = view.into_super();
+        // So a plugin's author can look at a page with Safari's Web Inspector, in a build of their own only: a release
+        // build's pages, signed in as they may be, aren't open to it.
+        view.setInspectable(cfg!(debug_assertions));
+        view.setHidden(true);
+        view
+    };
+    let observer = Observer::new(told.clone(), profile.clone(), keep_data, scripts, mtm);
+    // A tab to the extensions, whose buttons the page hears.
+    if let (Some(delegate), Some(controller)) = (&shared.tabs, &shared.extensions) {
+        let tab = actions::open(delegate, controller, &view, &observer, &profile.plugin);
+        observer.ivars().tab.replace(Some(tab.clone()));
+        actions::refresh(&tab);
+    }
+    if scripts {
+        // SAFETY: the configuration's controller holds the handler until the view goes (`Drop` takes it away).
+        unsafe {
+            let contents = view.configuration().userContentController();
+            contents.addScriptMessageHandler_contentWorld_name(ProtocolObject::from_ref(&*observer), &WKContentWorld::pageWorld(mtm), &NSString::from_str(LOG_HANDLER));
+            // Only Wings' own world reaches it: the page can't say it holds no secret field, nor reach it at all.
+            contents.addScriptMessageHandler_contentWorld_name(
+                ProtocolObject::from_ref(&*observer),
+                &WKContentWorld::worldWithName(&NSString::from_str(guard::WORLD), mtm),
+                &NSString::from_str(guard::HANDLER),
+            );
+        };
+    }
+    // SAFETY: the observer outlives the observing: `Drop` removes it before either goes.
+    unsafe {
+        for key in OBSERVED {
+            view.addObserver_forKeyPath_options_context(
+                &observer,
+                &NSString::from_str(key),
+                NSKeyValueObservingOptions::empty(),
+                std::ptr::null_mut(),
+            );
+        }
+        view.setNavigationDelegate(Some(ProtocolObject::from_ref(&*observer)));
+        view.setUIDelegate(Some(ProtocolObject::from_ref(&*observer)));
+    }
+    let (shots, web_dir) = (profile.dir.join("screenshots"), profile.dir.clone());
+    let mut native = WebPage { view, observer, told, shots, web_dir, scripts };
+    if let Some(url) = url {
+        native.go(&WebGo::Load(url.to_owned()), 0);
+    }
+    native
 }
 
 struct WebPage {
@@ -772,6 +869,8 @@ impl Native for WebPage {
                 WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Record(_) => {
                     self.told.tell(Heard::Result { token, result: Err(super::NEEDS_CHROMIUM.into()) });
                 }
+                // Done by `views::update`, whichever engine wrote the file.
+                WebGo::Download { .. } => {}
                 WebGo::Logs => {
                     let logs = self.observer.ivars().logs.borrow();
                     let of = |kind: &str| logs.iter().filter(|line| line["kind"] == kind).cloned().collect::<Vec<_>>();
@@ -921,6 +1020,12 @@ struct Ivars {
     /// The secret fields its document showed (`guard`).
     seen: guard::Seen,
     told: Tell,
+    /// What a window it opens is made with, as it was: its plugin's profile, its store, its scripts.
+    profile: Profile,
+    keep_data: bool,
+    scripts: bool,
+    /// What downloads its documents may start.
+    gate: RefCell<downloads::Gate>,
     told_last: RefCell<Option<State>>,
     /// Why the last page failed, until another starts.
     error: RefCell<Option<String>>,
@@ -1001,13 +1106,55 @@ define_class!(
                 (url, action.targetFrame().is_none_or(|frame| frame.isMainFrame()))
             };
             let allowed = super::may_navigate(&url, main_frame);
+            // A Cmd-click on a link opens it in a tab of its own, behind this one, and with Shift in front, as a browser does.
+            // SAFETY: the action's kind and keys, on the main thread.
+            let (link, keys) = unsafe { (action.navigationType() == WKNavigationType::LinkActivated, action.modifierFlags()) };
+            if allowed && main_frame && link && keys.contains(NSEventModifierFlags::Command) && self.ivars().told.popups() {
+                self.ivars().told.tell(Heard::Popup { popup: None, url, background: !keys.contains(NSEventModifierFlags::Shift) });
+                return decide.call((WKNavigationActionPolicy::Cancel,));
+            }
             // A page reached from a site signed in with imported cookies, or through one (a sign-in's redirects), may be
             // signed in by it: it counts as imported once it commits (`committed`).
             if allowed && main_frame && super::carries_imported(&self.ivars().web_dir, &self.ivars().committed.borrow(), &url) {
                 self.ivars().chain_tainted.set(true);
             }
-            let policy = if allowed { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel };
+            // A link that says to download what it leads to (`<a download>`).
+            // SAFETY: the action's own flag, on the main thread.
+            let download = allowed && self.ivars().told.downloads() && unsafe { action.shouldPerformDownload() };
+            let policy = match (allowed, download) {
+                (true, true) => WKNavigationActionPolicy::Download,
+                (true, false) => WKNavigationActionPolicy::Allow,
+                (false, _) => WKNavigationActionPolicy::Cancel,
+            };
             decide.call((policy,));
+        }
+
+        /// What comes back as an attachment, or as nothing WebKit can show, is downloaded for a page that hears its
+        /// downloads; anything else shows, and what can't show doesn't, as WebKit does with no delegate of this.
+        #[unsafe(method(webView:decidePolicyForNavigationResponse:decisionHandler:))]
+        fn decide_response(&self, _view: &WKWebView, navigation: &WKNavigationResponse, decide: &block2::DynBlock<dyn Fn(WKNavigationResponsePolicy)>) {
+            // SAFETY: the response WebKit hands over, on the main thread.
+            let (shows, attachment) = unsafe {
+                let response = navigation.response();
+                let disposition = response.downcast_ref::<NSHTTPURLResponse>().and_then(|http| http.valueForHTTPHeaderField(&NSString::from_str("Content-Disposition")));
+                (navigation.canShowMIMEType(), disposition.is_some_and(|value| value.to_string().trim().to_ascii_lowercase().starts_with("attachment")))
+            };
+            let policy = match (self.ivars().told.downloads() && (attachment || !shows), shows) {
+                (true, _) => WKNavigationResponsePolicy::Download,
+                (false, true) => WKNavigationResponsePolicy::Allow,
+                (false, false) => WKNavigationResponsePolicy::Cancel,
+            };
+            decide.call((policy,));
+        }
+
+        #[unsafe(method(webView:navigationAction:didBecomeDownload:))]
+        fn action_became_download(&self, view: &WKWebView, _action: &WKNavigationAction, download: &WKDownload) {
+            self.download(view, download);
+        }
+
+        #[unsafe(method(webView:navigationResponse:didBecomeDownload:))]
+        fn response_became_download(&self, view: &WKWebView, _response: &WKNavigationResponse, download: &WKDownload) {
+            self.download(view, download);
         }
 
         /// The view shows a new document: commands act on it from now.
@@ -1110,33 +1257,38 @@ define_class!(
             panel.beginWithCompletionHandler(&picked);
         }
 
-        /// A link that opens a new window (`target="_blank"`, `window.open`) loads in this view: a page has one view.
+        /// A link that opens a new window (`target="_blank"`, `window.open`) opens as a tab of its own, in a view made with
+        /// the configuration WebKit gives, which keeps its opener: `window.opener` and `postMessage` back work, as a
+        /// sign-in in a window does. Only one your click or key led to, and its page hears of one it opened by itself. For
+        /// a page that doesn't show such tabs one you clicked loads in this view.
         #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn new_window(
             &self,
             view: &WKWebView,
-            _configuration: &WKWebViewConfiguration,
+            configuration: &WKWebViewConfiguration,
             action: &WKNavigationAction,
             _features: &WKWindowFeatures,
         ) -> Option<Retained<WKWebView>> {
-            // SAFETY: the action's request, loaded in the view that asked, on the main thread; only to an address a web view
-            // may load, as `decide` checks the navigation that follows too.
-            unsafe {
-                let request = action.request();
-                let url = request.URL().and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
-                if super::may_navigate(&url, true) {
-                    view.loadRequest(&request);
-                }
-            }
-            None
+            self.open_window(view, configuration, action)
+        }
+
+        /// The page closed its own window: its tab closes.
+        #[unsafe(method(webViewDidClose:))]
+        fn closed(&self, _view: &WKWebView) {
+            self.ivars().told.tell(Heard::Closed);
         }
     }
 );
 
 impl Observer {
-    fn new(told: Tell, web_dir: std::path::PathBuf, mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(told: Tell, profile: Profile, keep_data: bool, scripts: bool, mtm: MainThreadMarker) -> Retained<Self> {
+        let web_dir = profile.dir.clone();
         let this = Self::alloc(mtm).set_ivars(Ivars {
             told,
+            profile,
+            keep_data,
+            scripts,
+            gate: RefCell::default(),
             told_last: RefCell::new(None),
             error: RefCell::new(None),
             pending: RefCell::new(None),
@@ -1154,6 +1306,60 @@ impl Observer {
         });
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// `new_window`'s work: the view WebKit loads the new window in, or none.
+    fn open_window(&self, view: &WKWebView, configuration: &WKWebViewConfiguration, action: &WKNavigationAction) -> Option<Retained<WKWebView>> {
+        // SAFETY: the action's request and keys, on the main thread.
+        let (request, url, keys) = unsafe {
+            let request = action.request();
+            let url = request.URL().and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default();
+            (request, url, action.modifierFlags())
+        };
+        // Only to an address a web view may load, as `decide` checks the navigation that follows too; a window opened
+        // with none is blank until its opener sends it somewhere.
+        if !url.is_empty() && !super::may_navigate(&url, true) {
+            return None;
+        }
+        let ivars = self.ivars();
+        let clicked = gesture_in(view, true);
+        if !ivars.told.popups() {
+            if clicked && !url.is_empty() {
+                // SAFETY: the view that asked, on the main thread.
+                unsafe { view.loadRequest(&request) };
+            }
+            return None;
+        }
+        if !clicked {
+            ivars.told.tell(Heard::Blocked { url });
+            return None;
+        }
+        let mtm = MainThreadMarker::new()?;
+        let tell = ivars.told.for_popup();
+        let page = web_page(&ivars.profile, ivars.keep_data, ivars.scripts, None, tell.clone(), Some(configuration), mtm);
+        let made = page.view.clone();
+        let background = keys.contains(NSEventModifierFlags::Command) && !keys.contains(NSEventModifierFlags::Shift);
+        super::views::popup(&ivars.told, &ivars.profile, ivars.keep_data, super::engine::Kind::WebKit, Box::new(page), tell, &url, background);
+        Some(made)
+    }
+
+    /// A navigation of the page became a download: it goes if its document may start one (`downloads::Gate`), and its page
+    /// hears how it goes. Your press or key counts for one download, as it does for one window: a script that starts five
+    /// on a click gets the first.
+    fn download(&self, view: &WKWebView, download: &WKDownload) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let ivars = self.ivars();
+        // SAFETY: the download's own request, on the main thread.
+        let url = unsafe { download.originalRequest().and_then(|request| request.URL()).and_then(|url| url.absoluteString()).map(|url| url.to_string()).unwrap_or_default() };
+        if !ivars.gate.borrow_mut().allow(ivars.generation.get(), gesture_in(view, true)) {
+            // SAFETY: WebKit's own call, on the main thread.
+            unsafe { download.cancel(None) };
+            return downloads::blocked(&ivars.told, &url, "");
+        }
+        let watch = Download::new(ivars.told.clone(), ivars.profile.clone(), url, ivars.committed.borrow().clone(), download, mtm);
+        // SAFETY: the delegate is kept until the download ends (`DOWNLOADING`), as WebKit holds it weakly.
+        unsafe { download.setDelegate(Some(ProtocolObject::from_ref(&*watch))) };
+        DOWNLOADING.with_borrow_mut(|all| all.push(watch));
     }
 
     /// The page waits on a dialog: Wings shows it in a sheet of its own on the window, naming the site, which the person
@@ -1295,6 +1501,122 @@ impl Observer {
             self.ivars().told_last.replace(Some(state.clone()));
             self.ivars().told.tell(Heard::State(state));
         }
+    }
+}
+
+/// The key of a download's progress that changes as it writes.
+const WRITTEN: &str = "completedUnitCount";
+
+struct DownloadIvars {
+    told: Tell,
+    profile: Profile,
+    url: String,
+    /// The page it was started on.
+    page: String,
+    download: Retained<WKDownload>,
+    /// Its id once it has a file to write (`downloads::begin`), and whether its progress is watched.
+    id: std::cell::Cell<u64>,
+    watching: std::cell::Cell<bool>,
+}
+
+define_class!(
+    // SAFETY: NSObject has no rules for subclasses, and this has no `Drop`.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = DownloadIvars]
+    struct Download;
+
+    impl Download {
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn observe(&self, _key: Option<&NSString>, _object: Option<&AnyObject>, _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>, _context: *mut c_void) {
+            // WebKit moves a download's progress on the main thread, WKDownload being the main actor's.
+            if MainThreadMarker::new().is_some() {
+                self.progressed();
+            }
+        }
+    }
+
+    unsafe impl NSObjectProtocol for Download {}
+
+    unsafe impl WKDownloadDelegate for Download {
+        /// Where it goes: a name no file has in ~/Downloads (`downloads::begin`).
+        #[unsafe(method(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:))]
+        fn destination(&self, _download: &WKDownload, response: &NSURLResponse, suggested: &NSString, done: &block2::DynBlock<dyn Fn(*mut NSURL)>) {
+            let ivars = self.ivars();
+            let download = ivars.download.clone();
+            // SAFETY: WebKit's own call, on the main thread.
+            let cancel: Rc<dyn Fn()> = Rc::new(move || unsafe { download.cancel(None) });
+            let Some((id, path)) = downloads::begin(&ivars.told, &ivars.profile, &ivars.url, &ivars.page, &suggested.to_string(), cancel) else {
+                return done.call((std::ptr::null_mut(),));
+            };
+            ivars.id.set(id);
+            // SAFETY: the response's size, and the download's progress, which this watches until it ends (`unwatch`).
+            unsafe {
+                let total = response.expectedContentLength();
+                if total > 0 {
+                    downloads::progress(id, 0, Some(total as u64));
+                }
+                ivars.download.progress().addObserver_forKeyPath_options_context(self, &NSString::from_str(WRITTEN), NSKeyValueObservingOptions::empty(), std::ptr::null_mut());
+            }
+            ivars.watching.set(true);
+            let file = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            done.call((Retained::as_ptr(&file).cast_mut(),));
+        }
+
+        #[unsafe(method(downloadDidFinish:))]
+        fn finished(&self, _download: &WKDownload) {
+            let this = self.retain();
+            this.unwatch();
+            downloads::finished(this.ivars().id.get(), None);
+            this.forget();
+        }
+
+        #[unsafe(method(download:didFailWithError:resumeData:))]
+        fn failed(&self, _download: &WKDownload, error: &NSError, _resume: Option<&NSData>) {
+            let this = self.retain();
+            this.unwatch();
+            match error.code() {
+                // NSURLErrorCancelled: you, or the page, stopped it.
+                -999 => downloads::canceled(this.ivars().id.get()),
+                _ => downloads::failed(this.ivars().id.get(), &error.localizedDescription().to_string()),
+            }
+            this.forget();
+        }
+    }
+);
+
+impl Download {
+    fn new(told: Tell, profile: Profile, url: String, page: String, download: &WKDownload, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(DownloadIvars {
+            told,
+            profile,
+            url,
+            page,
+            download: download.retain(),
+            id: std::cell::Cell::new(0),
+            watching: std::cell::Cell::new(false),
+        });
+        // SAFETY: NSObject's `init`.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn progressed(&self) {
+        let id = self.ivars().id.get();
+        let progress = self.ivars().download.progress();
+        let (written, total) = (progress.completedUnitCount(), progress.totalUnitCount());
+        downloads::progress(id, written.max(0) as u64, (total > 0).then_some(total as u64));
+    }
+
+    fn unwatch(&self) {
+        if self.ivars().watching.replace(false) {
+            // SAFETY: the observer `destination` added, removed once.
+            unsafe { self.ivars().download.progress().removeObserver_forKeyPath(self, &NSString::from_str(WRITTEN)) };
+        }
+    }
+
+    /// It ended: nothing keeps it now.
+    fn forget(&self) {
+        DOWNLOADING.with_borrow_mut(|all| all.retain(|one| !std::ptr::eq(&**one, self)));
     }
 }
 

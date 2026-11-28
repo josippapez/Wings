@@ -20,6 +20,8 @@ mod agent_webmcp;
 mod agent_tools;
 #[cfg(feature = "browser")]
 mod browser_page;
+#[cfg(feature = "browser")]
+mod downloads;
 #[cfg(feature = "settings")]
 mod engine_settings;
 mod extension;

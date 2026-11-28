@@ -101,7 +101,7 @@ fn tab_status(tab: &str) -> Value {
             "id": id, "project": project, "popped": popped, "tab": tab.id, "group": page.tabs.group_name(tab).unwrap_or_default(),
             "url": agent_url(&tab.state), "title": if tab.state.imported { "" } else { tab.state.title.as_str() },
             "loading": tab.state.loading, "canGoBack": tab.state.can_go_back, "canGoForward": tab.state.can_go_forward,
-            "dialog": tab.state.dialog,
+            "dialog": tab.state.dialog, "blockedPopup": tab.blocked.as_deref().map(origin_of),
         })
     })
 }
@@ -263,6 +263,29 @@ fn agent_url(state: &wings_plugin::ui::WebState) -> String {
     format!("{scheme}://{}", host.rsplit_once('@').map_or(host, |(_, host)| host))
 }
 
+/// The scheme and host of `url`, all an agent hears of a window a page opened by itself or a file it downloaded on a site
+/// signed in with imported cookies.
+fn origin_of(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return String::new() };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    format!("{scheme}://{}", host.rsplit_once('@').map_or(host, |(_, host)| host))
+}
+
+/// The caller's downloads, newest first: what each is, where it was saved, and how far it is.
+fn downloads(key: &str) -> Value {
+    with(|page| {
+        let list = page.downloads.of(key).into_iter().map(|download| {
+            let imported = page.tabs.get(&download.tab).is_some_and(|tab| tab.state.imported);
+            let event = &download.event;
+            json!({
+                "name": event.name, "path": event.path, "state": event.state, "received": event.received, "total": event.total,
+                "error": event.error, "url": if imported { origin_of(&event.url) } else { event.url.clone() }, "tab": download.tab,
+            })
+        });
+        Value::Array(list.collect())
+    })
+}
+
 /// Closing the tab or window ends this frame, so the answer to main goes out first.
 fn close_soon() {
     spawn(async {
@@ -391,6 +414,7 @@ pub async fn run(op: Value) -> Result<Value, String> {
         "status" if op.get("caller").is_none() => return Ok(status()),
         "navigate" => return navigate(&op, &key, &name).await,
         "tabs" => return tabs(&op, &key),
+        "downloads" => return Ok(downloads(&key)),
         _ => {}
     }
     let tab = target(&key)?;
@@ -1030,6 +1054,28 @@ mod tests {
         answer_last("t2", json!({ "found": false }));
         answer_last("t2", json!({ "found": false }));
         assert!(out.borrow().clone().unwrap().unwrap_err().contains("No WebMCP tool named nope"));
+    }
+
+    /// An agent hears its own group's downloads and the window its page didn't open, never the person's downloads, and only
+    /// the origin of one from a site signed in with imported cookies.
+    #[test]
+    fn an_agent_hears_its_own_downloads_and_the_window_its_page_could_not_open() {
+        record();
+        person_at("https://mine.com/");
+        navigate_as("ses-a", "A", "https://a.com/", false).unwrap();
+        let download = |id: u64, url: &str| wings_plugin::ui::WebDownload { id, url: url.into(), name: format!("f{id}.pdf"), path: format!("/Users/me/Downloads/f{id}.pdf"), state: "done".into(), received: 5, total: Some(5), error: None };
+        with(|page| {
+            page.downloads.heard("t1", None, download(1, "https://mine.com/private.pdf"));
+            page.downloads.heard("t2", Some("ses-a"), download(2, "https://a.com/report.pdf?token=1"));
+        });
+        let heard = run_op(json!({ "op": "downloads", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
+        assert_eq!(heard, json!([{ "name": "f2.pdf", "path": "/Users/me/Downloads/f2.pdf", "state": "done", "received": 5, "total": 5, "error": null, "url": "https://a.com/report.pdf?token=1", "tab": "t2" }]));
+        with(|page| page.tabs.get_mut("t2").unwrap().state.imported = true);
+        let heard = run_op(json!({ "op": "downloads", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
+        assert_eq!(heard[0]["url"], "https://a.com", "only the origin on a site signed in with imported cookies");
+        with(|page| page.tabs.get_mut("t2").unwrap().blocked = Some("https://ads.example/x?y".into()));
+        let status = run_op(json!({ "op": "status", "caller": caller_for("ses-a", "A") })).borrow().clone().unwrap().unwrap();
+        assert_eq!(status["blockedPopup"], "https://ads.example");
     }
 
     #[test]

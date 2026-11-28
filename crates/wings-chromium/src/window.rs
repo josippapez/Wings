@@ -21,6 +21,9 @@ use crate::objc_runtime::{class_getMethodImplementation, class_replaceMethod, ob
 pub type OnCreated = Rc<dyn Fn(&mut Window, &BrowserView)>;
 /// Called when the window becomes or stops being CEF's active window.
 pub type OnActivation = Rc<dyn Fn(bool)>;
+/// Called when the page opens a window CEF made a browser view for (`OnPopupBrowserViewCreated`): true when the host
+/// puts that view in a window of its own (`host`), false for CEF's default window.
+pub type OnPopup = Rc<dyn Fn(&BrowserView) -> bool>;
 
 /// White: what Chromium paints behind a page that sets no background of its own (Blink's default page base colour).
 // debt: where a page's base is transparent (see `on_theme_changed`), a page that relies on Chrome's dark canvas
@@ -32,6 +35,7 @@ pub const PAGE_BACKGROUND: u32 = 0xFFFF_FFFF;
 wrap_browser_view_delegate! {
     struct ChromeStyleBrowser {
         background: Option<u32>,
+        on_popup: Option<OnPopup>,
     }
 
     impl ViewDelegate {
@@ -53,6 +57,24 @@ wrap_browser_view_delegate! {
 
         fn chrome_toolbar_type(&self, _browser_view: Option<&mut BrowserView>) -> ChromeToolbarType {
             ChromeToolbarType::NONE
+        }
+
+        /// A window the page opens is a page as this one is, Chrome style with no toolbar.
+        fn delegate_for_popup_browser_view(
+            &self,
+            _browser_view: Option<&mut BrowserView>,
+            _settings: Option<&BrowserSettings>,
+            _client: Option<&mut Client>,
+            _is_devtools: i32,
+        ) -> Option<BrowserViewDelegate> {
+            Some(ChromeStyleBrowser::new(self.background, self.on_popup.clone()))
+        }
+
+        fn on_popup_browser_view_created(&self, _browser_view: Option<&mut BrowserView>, popup_browser_view: Option<&mut BrowserView>, is_devtools: i32) -> i32 {
+            match (&self.on_popup, popup_browser_view) {
+                (Some(on_popup), Some(popup)) if is_devtools == 0 => i32::from(on_popup(popup)),
+                _ => 0,
+            }
         }
     }
 }
@@ -133,8 +155,9 @@ wrap_window_delegate! {
 
 /// Opens `url` in a new frameless Chrome-style window at `bounds` (screen coordinates in DIPs, top-left origin, as CEF
 /// Views takes them), in `context` (the global one for `None`), with `background` behind the page wherever it paints
-/// nothing (the theme's for `None`). Call it on CEF's UI thread, the main thread with the external pump.
-pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<RequestContext>, background: Option<u32>, on_created: OnCreated, on_activation: OnActivation) {
+/// nothing (the theme's for `None`). A window the page opens goes to `on_popup`, or CEF's default window for `None`. Call
+/// it on CEF's UI thread, the main thread with the external pump.
+pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<RequestContext>, background: Option<u32>, on_popup: Option<OnPopup>, on_created: OnCreated, on_activation: OnActivation) {
     let (mut client, mut context) = (client, context);
     let browser_view = browser_view_create(
         client.as_mut(),
@@ -142,8 +165,14 @@ pub fn open(url: &str, bounds: Rect, client: Option<Client>, context: Option<Req
         Some(&BrowserSettings::default()),
         None,
         context.as_mut(),
-        Some(&mut ChromeStyleBrowser::new(background)),
+        Some(&mut ChromeStyleBrowser::new(background, on_popup)),
     );
+    host(browser_view, bounds, on_created, on_activation);
+}
+
+/// Puts `browser_view`, one CEF made for a window a page opened (`OnPopup`), in a new frameless window at `bounds`, as
+/// `open` puts a page's.
+pub fn host(browser_view: Option<BrowserView>, bounds: Rect, on_created: OnCreated, on_activation: OnActivation) {
     let mut delegate = FramelessWindow::new(RefCell::new(browser_view), bounds, on_created, on_activation);
     window_create_top_level(Some(&mut delegate));
 }
@@ -432,7 +461,7 @@ mod tests {
         let raw: &'static mut _cef_view_t = Box::leak(Box::new(unsafe { std::mem::zeroed() }));
         raw.set_background_color = Some(given);
         let mut view: View = (raw as *mut _cef_view_t).wrap_result();
-        let delegate = ChromeStyleBrowser { background, cef_object: std::ptr::null_mut() };
+        let delegate = ChromeStyleBrowser { background, on_popup: None, cef_object: std::ptr::null_mut() };
         delegate.on_theme_changed(Some(&mut view));
         delegate.on_theme_changed(Some(&mut view));
         std::mem::take(&mut *GIVEN.lock().unwrap())

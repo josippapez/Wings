@@ -598,3 +598,116 @@ fn an_agents_shown_tab_stays_live_while_its_wings_tab_is_in_the_background() {
     settle(&app, &mut window);
     assert!(!did.borrow()[before..].contains(&Did::Placed(None)), "not put away: {:?}", &did.borrow()[before..]);
 }
+
+/// A page whose view `main` shows the windows it opens as views of their own: the first window it hears of becomes the
+/// view `pop`, which takes the view made for it, until it closes itself. It saves what each hears.
+fn popup_page() -> String {
+    fake::script("web", || {
+        let mut taken: Option<Value> = None;
+        let mut closed = false;
+        move |cx: &mut Cx<'_>, hear: Hear<'_>| {
+            match hear {
+                Hear::Start => {}
+                Hear::Event("1:popup", payload) => {
+                    cx.save(&format!("popup{}", payload["popup"]), payload);
+                    if taken.is_some() {
+                        return;
+                    }
+                    taken = Some(payload.clone());
+                }
+                Hear::Event("1:download", payload) => return cx.save(&format!("download{}", payload["id"]), payload),
+                Hear::Event("2:state", payload) => return cx.save("pop-state", payload),
+                Hear::Event("2:close", _) => {
+                    cx.save("pop-closed", &json!(true));
+                    closed = true;
+                }
+                _ => return,
+            }
+            let mut children = vec![json!({ "id": 1, "type": "WebView", "props": {
+                "name": "main", "url": "https://app.example/", "fill": true,
+                "onPopup": "1:popup", "onDownload": "1:download",
+            }, "children": [] })];
+            if let (Some(popup), false) = (&taken, closed) {
+                children.push(json!({ "id": 2, "type": "WebView", "props": {
+                    "name": "pop", "url": popup["url"], "popup": popup["popup"], "fill": true, "onState": "2:state", "onClose": "2:close",
+                }, "children": [] }));
+            }
+            cx.render(&json!({ "id": 0, "type": "#root", "props": {}, "children": children }));
+        }
+    })
+}
+
+/// A window a page opens (a sign-in's `window.open`) is the view its engine made for it, with its opener, which the
+/// page's node takes rather than making one at its address: what it said before the node took it reaches the node, its
+/// `window.close()` reaches the page, and a popup the page never takes ends with the page. A download is heard by its view,
+/// or by another of the page's once its view is gone. A view whose node hears none of this gets no windows or downloads.
+#[test]
+fn a_window_a_page_opens_is_the_view_its_engine_made_which_the_page_takes_with_what_it_said() {
+    use crate::web::{downloads::Report, testing::open_popup};
+    let data = Data::temp();
+    let views = json!([{ "id": "web", "title": "Web", "page": "dist/web.html", "opens": ["tab"], "multiple": true }]);
+    data.install_script("browser", json!({ "permissions": { "webView": true }, "contributes": { "views": views } }), &idle("main"), &[("web", &popup_page())], "browser-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, tells) = record(id);
+    let tab = window.update(|w, window, cx| {
+        assert!(w.open_plugin_view("browser", "web", None, window, cx));
+        w.plugin_tabs.iter().find(|tab| tab.plugin == "browser").unwrap().id
+    });
+    until(&app, &mut window, "the web page was never made", |_| !did.borrow().is_empty());
+    settle(&app, &mut window);
+    let opener = tells.borrow()[0].clone();
+    assert!(opener.popups() && opener.downloads(), "its node hears windows and downloads");
+
+    let popup = open_popup(&opener, &did, "https://login.example/authorize");
+    // It loads before the page has a node for it.
+    popup.tell(Heard::State(State { url: "https://login.example/authorize?client=1".into(), loading: true, ..State::default() }));
+    until(&app, &mut window, "the page never heard of the window", |_| {
+        data.saved("browser", "browser-scope", "popup1") == Some(json!({ "url": "https://login.example/authorize", "background": false, "popup": 1 }))
+    });
+    until(&app, &mut window, "the window's node never heard what it said before it was taken", |_| {
+        data.saved("browser", "browser-scope", "pop-state").is_some_and(|state| state["url"] == "https://login.example/authorize?client=1")
+    });
+    settle(&app, &mut window);
+    let made = |did: &[Did]| did.iter().filter(|did| matches!(did, Did::Made { .. })).count();
+    assert_eq!(made(&did.borrow()), 1, "the window's view is the one its engine made, not a new one: {:?}", did.borrow());
+
+    // A download is its own view's; once that view is gone, another of the page's hears it.
+    let report = |id: u64| Report { id, url: "https://app.example/report.pdf".into(), name: "report.pdf".into(), path: "/Users/me/Downloads/report.pdf".into(), state: "progress", received: 10, total: Some(100), error: None };
+    opener.tell(Heard::Download(report(1)));
+    until(&app, &mut window, "the page never heard its download", |_| data.saved("browser", "browser-scope", "download1").is_some_and(|heard| heard["state"] == "progress" && heard["total"] == 100));
+
+    popup.tell(Heard::Closed);
+    until(&app, &mut window, "the page never heard its window close", |_| data.saved("browser", "browser-scope", "pop-closed") == Some(json!(true)));
+    settle(&app, &mut window);
+    popup.tell(Heard::Download(report(2)));
+    until(&app, &mut window, "a download of a closed view went unheard", |_| data.saved("browser", "browser-scope", "download2").is_some());
+
+    // A second window it never takes ends with the page.
+    open_popup(&opener, &did, "https://elsewhere.example/");
+    until(&app, &mut window, "the page never heard of the second window", |_| data.saved("browser", "browser-scope", "popup2").is_some());
+    let ended = |did: &[Did]| did.iter().filter(|did| **did == Did::Ended).count();
+    assert_eq!(ended(&did.borrow()), 1, "only the closed window's view ended: {:?}", did.borrow());
+    window.update(|w, window, cx| {
+        let index = w.plugin_tabs.iter().position(|t| t.id == tab).unwrap();
+        w.close_plugin_tab(index, window, cx);
+    });
+    settle(&app, &mut window);
+    until(&app, &mut window, "a view outlived its page", |_| ended(&did.borrow()) == 3);
+}
+
+/// A page's view whose node hears neither windows nor downloads gets neither: its engine loads such a link in it, and
+/// downloads nothing, as before.
+#[test]
+fn a_view_that_hears_no_windows_or_downloads_gets_none() {
+    let data = Data::temp();
+    install(&data, "browser", json!({ "webView": true }), false);
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    let id = window.update(|_, window, _| window.window_handle().window_id());
+    let (did, tells) = record(id);
+    window.update(|w, window, cx| assert!(w.open_plugin_view("browser", "web", None, window, cx)));
+    until(&app, &mut window, "the web page was never made", |_| !did.borrow().is_empty());
+    settle(&app, &mut window);
+    let tell = tells.borrow()[0].clone();
+    assert!(!tell.popups() && !tell.downloads());
+}

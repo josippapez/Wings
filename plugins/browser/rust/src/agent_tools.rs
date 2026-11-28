@@ -85,6 +85,8 @@ struct Info {
     url: String,
     title: String,
     loading: bool,
+    /// The origin of a window the tab's page opened by itself, which wasn't opened: a click that isn't yours opens none.
+    blocked: String,
     /// When this page last had the focus: the page of a project that has it most recently is the one a tool uses.
     focused_at: f64,
     /// The size last set by a tool, since the person can drag a window to another.
@@ -122,6 +124,7 @@ fn hear(page: &Value) {
             url: text(page, "url"),
             title: text(page, "title"),
             loading: page["loading"] == true,
+            blocked: text(page, "blockedPopup"),
             focused_at,
             size: old.and_then(|old| old.size),
         });
@@ -198,7 +201,11 @@ fn describe(page: &Info, mine: bool) -> String {
         (false, false) => format!(" in the group \"{}\"", page.group),
     };
     let what = if page.tab.is_empty() { "Browser page".to_owned() } else { format!("Browser tab {}{whose}", page.tab) };
-    format!("{what} (page {}{place}): {}{title}{}", page.id, if page.url.is_empty() { "(no address yet)" } else { &page.url }, if page.loading { " (still loading)" } else { "" })
+    let blocked = match page.blocked.as_str() {
+        "" => String::new(),
+        origin => format!(". It blocked a pop-up to {origin}: a page opens one only on a real click, which yours in the page aren't, so ask the person to click it (handoff)"),
+    };
+    format!("{what} (page {}{place}): {}{title}{}{blocked}", page.id, if page.url.is_empty() { "(no address yet)" } else { &page.url }, if page.loading { " (still loading)" } else { "" })
 }
 
 /// A tab as its page answered about it.
@@ -213,6 +220,7 @@ fn info_of(answer: &Value) -> Info {
         url: text(answer, "url"),
         title: text(answer, "title"),
         loading: answer["loading"] == true,
+        blocked: text(answer, "blockedPopup"),
         focused_at: 0.0,
         size: get(&text(answer, "id")).and_then(|page| page.size),
     }
@@ -249,6 +257,7 @@ fn op_for(tool: &str, input: &Value) -> Result<(Value, u32), String> {
         }
         "drag" => (op("drag", &["from", "to"]), OP_MS),
         "tabs" => (op("tabs", &["action", "tab"]), OP_MS),
+        "downloads" => (op("downloads", &[]), OP_MS),
         "eval" => (op("eval", &["script"]), OP_MS),
         // One command answers both; the tool keeps its half.
         "console" | "network" => (op("logs", &[]), OP_MS),
@@ -566,6 +575,19 @@ fn present(tool: &str, answer: Value) -> Value {
         "eval" => cut(serde_json::to_string_pretty(&answer).unwrap_or_default(), EVAL_MAX).into(),
         "console" | "network" => cut(serde_json::to_string_pretty(&answer[tool]).unwrap_or_default(), EVAL_MAX).into(),
         "dialog" => "Answered the page's dialog.".into(),
+        "downloads" => {
+            let lines: Vec<String> = answer.as_array().into_iter().flatten().map(|download| {
+                let size = |key: &str| download[key].as_u64().map_or(String::new(), |bytes| format!("{bytes} bytes"));
+                let how = match download["state"].as_str().unwrap_or_default() {
+                    "progress" => format!("downloading, {} of {}", size("received"), if download["total"].is_null() { "an unknown size".to_owned() } else { size("total") }),
+                    "done" => format!("done, {}", size("total")),
+                    state => format!("{state}{}", download["error"].as_str().map_or(String::new(), |why| format!(": {why}"))),
+                };
+                let path = text(download, "path");
+                format!("{} ({how}) from {}{}", text(download, "name"), text(download, "url"), if path.is_empty() { String::new() } else { format!(", saved to {path}") })
+            }).collect();
+            if lines.is_empty() { "None of your tabs downloaded anything yet.".into() } else { lines.join("\n").into() }
+        }
         "upload" => format!("Set {} file(s) on the input.", answer["files"].as_u64().unwrap_or(0)).into(),
         "recording" => recording_text(&answer).into(),
         "webmcp" => {
@@ -643,7 +665,7 @@ mod tests {
     #[test]
     fn every_tool_in_the_manifest_has_a_schema_and_a_route() {
         let names: Vec<String> = schemas().into_iter().map(|(name, _)| name).collect();
-        for tool in ["open", "tabs", "pop_out", "pop_in", "resize", "navigate", "status", "screenshot", "snapshot", "click", "fill", "type", "press", "wait_for", "eval", "hover", "select", "scroll", "drag", "handoff", "emulate", "console", "network", "dialog", "upload", "screenshot_diff", "recording", "demonstrate", "webmcp"] {
+        for tool in ["open", "tabs", "pop_out", "pop_in", "resize", "navigate", "status", "screenshot", "snapshot", "click", "fill", "type", "press", "wait_for", "eval", "hover", "select", "scroll", "drag", "handoff", "emulate", "console", "network", "dialog", "upload", "screenshot_diff", "recording", "demonstrate", "webmcp", "downloads"] {
             assert!(names.iter().any(|name| name == tool), "{tool} is in the manifest");
         }
         let manifest: Value = serde_json::from_str(MANIFEST).unwrap();
@@ -659,6 +681,26 @@ mod tests {
         assert!(present("console", logs.clone()).as_str().unwrap().contains("boom"));
         assert!(!present("network", logs).as_str().unwrap().contains("boom"));
         assert_eq!(op_for("dialog", &json!({ "accept": false })).unwrap().0, json!({ "op": "dialog", "accept": false, "text": null }));
+    }
+
+    /// The downloads tool lists what the caller's tabs saved and where; a tab whose page tried a window by itself says so.
+    #[test]
+    fn downloads_list_where_each_file_went_and_a_blocked_pop_up_is_told() {
+        assert_eq!(op_for("downloads", &json!({})).unwrap().0, json!({ "op": "downloads" }));
+        let listed = json!([
+            { "name": "report.pdf", "path": "/Users/me/Downloads/report.pdf", "state": "done", "received": 2048, "total": 2048, "error": null, "url": "https://a.com/report.pdf", "tab": "t2" },
+            { "name": "big.zip", "path": "/Users/me/Downloads/big.zip", "state": "progress", "received": 10, "total": null, "error": null, "url": "https://a.com/big.zip", "tab": "t2" },
+            { "name": "x.bin", "path": "", "state": "blocked", "received": 0, "total": null, "error": "The page tried to download more files by itself.", "url": "https://a.com/x.bin", "tab": "t2" },
+        ]);
+        assert_eq!(
+            present("downloads", listed),
+            json!("report.pdf (done, 2048 bytes) from https://a.com/report.pdf, saved to /Users/me/Downloads/report.pdf\nbig.zip (downloading, 10 bytes of an unknown size) from https://a.com/big.zip, saved to /Users/me/Downloads/big.zip\nx.bin (blocked: The page tried to download more files by itself.) from https://a.com/x.bin")
+        );
+        assert_eq!(present("downloads", json!([])), json!("None of your tabs downloaded anything yet."));
+        let mut tab = info_of(&json!({ "id": "p1", "tab": "t2", "url": "https://a.com/", "blockedPopup": "https://login.a.com" }));
+        assert!(describe(&tab, true).ends_with("It blocked a pop-up to https://login.a.com: a page opens one only on a real click, which yours in the page aren't, so ask the person to click it (handoff)"));
+        tab.blocked.clear();
+        assert!(!describe(&tab, true).contains("pop-up"));
     }
 
     #[test]
@@ -1027,8 +1069,8 @@ mod tests {
             }
         }
         assert_eq!(find("recording")["inputSchema"]["properties"]["action"]["enum"], json!(["start", "status", "stop", "cancel"]));
-        assert_eq!(manifest["version"], "0.4.2");
-        assert_eq!(manifest["minWingsVersion"], "0.2.129");
+        assert_eq!(manifest["version"], "0.5.0");
+        assert_eq!(manifest["minWingsVersion"], "0.2.132");
         let instructions = manifest["contributes"]["mcpInstructions"].as_str().unwrap();
         assert!(instructions.chars().count() <= 500 && instructions.contains("upload") && instructions.contains("recording") && instructions.contains("/tmp") && instructions.contains("demonstrate"), "{instructions}");
         // The tools are checked against their schema before they run, so the schema's own limits match the ones main checks.

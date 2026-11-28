@@ -131,15 +131,16 @@ pub(super) fn browser(out: PathBuf) {
     let mut cx = app();
     let asks = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     host.start_main(&agent_main(asks.clone()), fail_on_error).unwrap();
-    let pages: [(&str, String, &str, f32); 4] = [
+    let pages: [(&str, String, &str, f32); 5] = [
         ("tab", module("browser"), "", 640.0),
         ("page", module("browser"), "", 640.0),
+        ("downloads", module("browser"), "", 640.0),
         ("tabs", module("browser"), "", 640.0),
         ("settings", module("settings"), "Search engine", 1100.0),
     ];
     for width in [1000.0, 640.0] {
         for (name, source, expected, height) in &pages {
-            let args = (*name == "page").then_some(&page_args);
+            let args = matches!(*name, "page" | "downloads").then_some(&page_args);
             let kept = (*name == "tabs").then(|| tabs_kept.clone());
             let handle = cx
                 .open_offscreen_window(size(px(width), px(*height)), |_, cx| {
@@ -170,7 +171,34 @@ pub(super) fn browser(out: PathBuf) {
             }
             // The settings ask for the other browsers and extensions as they open.
             wait(&mut cx, window, Duration::from_millis(1500));
-            save(&mut cx, window, out.join(format!("browser-{name}-{width}.png")));
+            if *name != "downloads" {
+                save(&mut cx, window, out.join(format!("browser-{name}-{width}.png")));
+            }
+            if *name == "downloads" {
+                // Downloads as the page's web view tells them: one under way, one done, one that failed and one the page
+                // tried by itself, which open the list under the page; then a window the page opened with no click.
+                let download = |id: u64, name: &str, state: &str, received: u64, total: Option<u64>, error: Option<&str>| {
+                    json!({ "id": id, "url": format!("https://github.com/acme/web/releases/download/v2.4.0/{name}"), "name": name,
+                        "path": if state == "blocked" { String::new() } else { format!("/Users/ana/Downloads/{name}") }, "state": state,
+                        "received": received, "total": total, "error": error })
+                };
+                let told = [
+                    download(1, "acme-web-2.4.0-arm64.dmg", "done", 48_200_000, Some(48_200_000), None),
+                    download(2, "release-notes.pdf", "failed", 120_000, Some(800_000), Some("The download stopped (NETWORK_FAILED)")),
+                    download(3, "acme-web-2.4.0-source.tar.gz", "progress", 12_400_000, Some(31_900_000), None),
+                    download(4, "update.pkg", "blocked", 0, None, Some("The page tried to download more files by itself. Click its link to download it.")),
+                ];
+                for event in &told {
+                    assert!(handle.read_with(&cx, |view, _| view.tell_web("tab-t1", "download", event)).unwrap(), "the page hears no downloads");
+                }
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-downloads-{width}.png")));
+                let blocked = json!({ "url": "https://ads.example.com/offer", "blocked": true });
+                assert!(handle.read_with(&cx, |view, _| view.tell_web("tab-t1", "popup", &blocked)).unwrap(), "the page hears no windows");
+                assert!(handle.read_with(&cx, |view, _| view.press("Hide downloads", 0)).unwrap(), "no Hide downloads button");
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-popup-blocked-{width}.png")));
+            }
             if *name == "page" {
                 // The More menu of a web page, its item's question, and what the fixture's host (no web engines) answers.
                 // A menu's button has no click of its own for the page: the app opens the menu.

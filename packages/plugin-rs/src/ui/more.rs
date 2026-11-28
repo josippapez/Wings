@@ -185,8 +185,10 @@ pub fn textarea(label: &str, value: &str, rows: u32, on_change: impl Fn(String) 
 /// the page, for as long as the node stays in the tree, so building the page again never reloads it. Props, set with
 /// `.prop`: `url` (http, https or `about:blank`, loaded when the view is first made), `command` (`web_command`),
 /// `keepData` (default true; false keeps cookies and site data only while Wings runs), `height` in points (default 400)
-/// or `fill: true` to take the rest of its container's height, and `onState` (`WebState::from_event`). It is drawn
-/// under a dialog or sheet of the page and an app menu, and is an empty area in a headless render.
+/// or `fill: true` to take the rest of its container's height, and `onState` (`WebState::from_event`). With `onPopup`
+/// (`WebPopup`) the windows the page opens come to the plugin, a `popup` prop takes the view made for one, and `onClose`
+/// hears it close itself; with `onDownload` (`WebDownload`) it downloads (Wings 0.2.132). It is drawn under a dialog or
+/// sheet of the page and an app menu, and is an empty area in a headless render.
 pub fn web_view(name: &str) -> Node {
     Node::new("WebView").prop("name", name)
 }
@@ -285,6 +287,70 @@ pub fn web_record(record: &WebRecord, token: u64) -> Value {
 /// answers `onResult` with `{ token, error }` otherwise.
 pub fn web_extension_action(id: &str, token: u64) -> Value {
     json!({ "action": "extension", "id": id, "token": token })
+}
+
+/// The `command` prop that acts on a file the page's web views downloaded (`WebDownload::id`, Wings 0.2.132): `action` is
+/// `reveal` (shows it in Finder), `open` (opens it in its app once it is done) or `cancel` (stops one under way). Wings
+/// reveals or opens one only right after your click or key in the page, and answers `onResult` with `{ token, error }`
+/// otherwise.
+pub fn web_download(action: &str, id: u64, token: u64) -> Value {
+    json!({ "action": "download", "do": action, "id": id, "token": token })
+}
+
+/// What a `web_view`'s `onDownload` hears of one download (Wings 0.2.132): a view whose node has no `onDownload`
+/// downloads nothing. Files go into ~/Downloads, under a name no file there has, marked as from the web.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebDownload {
+    pub id: u64,
+    pub url: String,
+    /// The file's name and full path: empty for one that was blocked.
+    pub name: String,
+    pub path: String,
+    /// `progress`, `done`, `failed`, `canceled` or `blocked` (the page started more than its first download by itself).
+    pub state: String,
+    pub received: u64,
+    /// None while the server hasn't said how big it is.
+    pub total: Option<u64>,
+    pub error: Option<String>,
+}
+
+impl WebDownload {
+    pub fn from_event(event: &Value) -> Self {
+        let text = |key: &str| event[key].as_str().unwrap_or_default().to_owned();
+        Self {
+            id: event["id"].as_u64().unwrap_or_default(),
+            url: text("url"),
+            name: text("name"),
+            path: text("path"),
+            state: text("state"),
+            received: event["received"].as_u64().unwrap_or_default(),
+            total: event["total"].as_u64(),
+            error: event["error"].as_str().map(str::to_owned),
+        }
+    }
+}
+
+/// What a `web_view`'s `onPopup` hears (Wings 0.2.132): its page opened a window at `url` (a link to a new one,
+/// `window.open`, a Cmd-click), to show as a tab, in the background for a Cmd-click. `popup` is the view the engine made
+/// for it, which keeps its opener: a `web_view` with the `popup` prop set to it shows that view. None is a plain new tab
+/// at `url`. `blocked`: the page opened it with no click of yours, and it wasn't opened.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebPopup {
+    pub url: String,
+    pub background: bool,
+    pub popup: Option<u64>,
+    pub blocked: bool,
+}
+
+impl WebPopup {
+    pub fn from_event(event: &Value) -> Self {
+        Self {
+            url: event["url"].as_str().unwrap_or_default().to_owned(),
+            background: event["background"] == true,
+            popup: event["popup"].as_u64(),
+            blocked: event["blocked"] == true,
+        }
+    }
 }
 
 /// An extension's button for the page a `web_view` shows, which a browser draws in its toolbar (Wings 0.2.116).
@@ -443,6 +509,19 @@ mod tests {
         let event = json!({ "url": "https://a.b/", "title": "A", "loading": true, "canGoBack": true, "canGoForward": false, "error": null });
         assert!(handlers.call(tree[0]["props"]["onState"].as_str().unwrap(), &event));
         assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None, imported: false, extensions: vec![] });
+    }
+
+    #[test]
+    fn a_popup_and_a_download_read_what_the_app_sends_and_a_download_command_names_one() {
+        let popup = WebPopup::from_event(&json!({ "url": "https://login.example/", "background": false, "popup": 4 }));
+        assert_eq!(popup, WebPopup { url: "https://login.example/".into(), background: false, popup: Some(4), blocked: false });
+        assert_eq!(WebPopup::from_event(&json!({ "url": "https://ads.example/", "blocked": true })).blocked, true);
+        let event = json!({ "id": 3, "url": "https://a.b/r.pdf", "name": "r.pdf", "path": "/Users/me/Downloads/r.pdf", "state": "progress", "received": 10, "total": null, "error": null });
+        assert_eq!(
+            WebDownload::from_event(&event),
+            WebDownload { id: 3, url: "https://a.b/r.pdf".into(), name: "r.pdf".into(), path: "/Users/me/Downloads/r.pdf".into(), state: "progress".into(), received: 10, total: None, error: None }
+        );
+        assert_eq!(web_download("reveal", 3, 9), json!({ "action": "download", "do": "reveal", "id": 3, "token": 9 }));
     }
 
     #[test]

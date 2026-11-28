@@ -5,6 +5,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     path::PathBuf,
     rc::{Rc, Weak},
 };
@@ -21,8 +22,8 @@ use super::{agent, devtools::Incoming, focus, keys, runtime};
 use crate::{
     page::tree::WebGo,
     web::{
-        Profile,
-        views::{Dialog, Heard, Maker, Native, Overlaid, State, Tell},
+        Profile, downloads,
+        views::{self, Dialog, Heard, Maker, Native, Overlaid, State, Tell},
     },
 };
 
@@ -33,41 +34,9 @@ pub struct Chromium;
 
 impl Maker for Chromium {
     fn make(&self, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
-        let page = Rc::new(Shared {
-            told,
-            profile: profile.clone(),
-            keep_data,
-            scripts,
-            web_dir: profile.dir.clone(),
-            start: RefCell::new(url.unwrap_or("about:blank").to_owned()),
-            now: RefCell::new(Now { url: url.unwrap_or_default().to_owned(), loading: true, ..Now::default() }),
-            told_last: RefCell::new(None),
-            committed: RefCell::default(),
-            generation: Cell::new(0),
-            chain_tainted: Cell::new(false),
-            agent: agent::Agent::default(),
-            ready: Cell::new(false),
-            clear_first: Cell::new(false),
-            browser: RefCell::new(None),
-            window: RefCell::new(None),
-            ns: RefCell::new(None),
-            parent: RefCell::new(None),
-            want: Cell::new(None),
-            over: RefCell::default(),
-            dim: RefCell::new(None),
-            attached: Cell::new(false),
-            live: Cell::new(false),
-            closed: Cell::new(false),
-            pending: RefCell::default(),
-            dialog: RefCell::new(None),
-            sheet: RefCell::new(None),
-            dialogs: Cell::new((0, 0, false)),
-            forwarded: Cell::new(None),
-        });
+        let page = Shared::new(told, profile, keep_data, scripts, url, None);
         // Its loading state shows while CEF starts.
         page.tell();
-        runtime::opened();
-        PAGES.with_borrow_mut(|pages| pages.push(Rc::downgrade(&page)));
         let weak = Rc::downgrade(&page);
         runtime::ensure(profile, move |ready| {
             let Some(page) = weak.upgrade().filter(|page| !page.closed.get()) else { return };
@@ -274,6 +243,15 @@ pub struct Shared {
     dialogs: Cell<(u64, u32, bool)>,
     /// The key code of a press handed to Wings, whose key-up and characters the page doesn't get either.
     forwarded: Cell<Option<i32>>,
+    /// It was made for a window another page opened: CEF made its browser and loads its first page, which keeps the
+    /// opener, and its opener's browser and the popup's number name it until then (`on_before_popup_aborted`).
+    popup: Option<(i32, i32)>,
+    /// What downloads its documents may start, the addresses CEF said you started one from (`can_download`), and its
+    /// downloads under way: Wings' id by CEF's, and how to stop each.
+    gate: RefCell<downloads::Gate>,
+    asked: RefCell<Vec<String>>,
+    downloads: RefCell<HashMap<u32, u64>>,
+    stops: RefCell<HashMap<u32, DownloadItemCallback>>,
 }
 
 struct Page(Rc<Shared>);
@@ -316,6 +294,93 @@ impl Drop for Page {
 }
 
 impl Shared {
+    /// A page of `profile` at `url`, kept in the list of pages; `popup` names the opener's browser and the popup's
+    /// number for one made for a window a page opened.
+    fn new(told: Tell, profile: &Profile, keep_data: bool, scripts: bool, url: Option<&str>, popup: Option<(i32, i32)>) -> Rc<Self> {
+        let page = Rc::new(Shared {
+            told,
+            profile: profile.clone(),
+            keep_data,
+            scripts,
+            web_dir: profile.dir.clone(),
+            start: RefCell::new(url.unwrap_or("about:blank").to_owned()),
+            now: RefCell::new(Now { url: url.unwrap_or_default().to_owned(), loading: true, ..Now::default() }),
+            told_last: RefCell::new(None),
+            committed: RefCell::default(),
+            generation: Cell::new(0),
+            chain_tainted: Cell::new(false),
+            agent: agent::Agent::default(),
+            ready: Cell::new(false),
+            clear_first: Cell::new(false),
+            browser: RefCell::new(None),
+            window: RefCell::new(None),
+            ns: RefCell::new(None),
+            parent: RefCell::new(None),
+            want: Cell::new(None),
+            over: RefCell::default(),
+            dim: RefCell::new(None),
+            attached: Cell::new(false),
+            live: Cell::new(false),
+            closed: Cell::new(false),
+            pending: RefCell::default(),
+            dialog: RefCell::new(None),
+            sheet: RefCell::new(None),
+            dialogs: Cell::new((0, 0, false)),
+            forwarded: Cell::new(None),
+            popup,
+            gate: RefCell::default(),
+            asked: RefCell::default(),
+            downloads: RefCell::default(),
+            stops: RefCell::default(),
+        });
+        runtime::opened();
+        PAGES.with_borrow_mut(|pages| pages.push(Rc::downgrade(&page)));
+        page
+    }
+
+    /// Whether it was made for a window another page opened.
+    pub(super) fn is_popup(&self) -> bool {
+        self.popup.is_some()
+    }
+
+    /// Whether what CEF says of its browser is told: not the blank page an opened one shows until it is ready (`ready`),
+    /// but all of a popup's, whose first page is the one it opened with.
+    fn telling(&self) -> bool {
+        self.ready.get() || self.popup.is_some()
+    }
+
+    /// A window this page opened at `url` with your click: a page made for it, whose browser CEF makes with its opener
+    /// (`client`), and which waits for this page's plugin to show it as a tab (`views::popup`).
+    fn opened_popup(&self, popup_id: i32, url: &str, background: bool) -> Rc<Shared> {
+        let opener = self.browser.borrow().as_ref().map_or(0, Browser::identifier);
+        let tell = self.told.for_popup();
+        let popup = Shared::new(tell.clone(), &self.profile, self.keep_data, self.scripts, (!url.is_empty()).then_some(url), Some((opener, popup_id)));
+        popup.parent.replace(self.parent.borrow().clone());
+        views::popup(&self.told, &self.profile, self.keep_data, crate::web::engine::Kind::Chromium, Box::new(Page(popup.clone())), tell, url, background);
+        popup
+    }
+
+    /// CEF made the browser view of a window a page opened: when it is this popup's, it goes in a window of Wings' own,
+    /// placed as any page's is.
+    fn host(self: &Rc<Self>, view: &BrowserView) {
+        let bounds = self.screen_rect().map_or(Rect { x: -10_000, y: -10_000, width: 800, height: 600 }, cef_rect);
+        let (weak, activated) = (Rc::downgrade(self), Rc::downgrade(self));
+        frameless::host(
+            Some(view.clone()),
+            bounds,
+            Rc::new(move |window, _view| {
+                if let Some(page) = weak.upgrade() {
+                    page.created(window);
+                }
+            }),
+            Rc::new(move |active| {
+                if let Some(page) = activated.upgrade() {
+                    focus::page_active(&page, active);
+                }
+            }),
+        );
+    }
+
     /// Opens its window, once CEF is up.
     fn open(self: &Rc<Self>) {
         // A plugin that may run scripts in its pages gets the address once its channel is readied (`ready`), and a page
@@ -337,6 +402,7 @@ impl Shared {
             Some(client),
             context,
             Some(frameless::PAGE_BACKGROUND),
+            Some(Rc::new(host_popup) as frameless::OnPopup),
             Rc::new(move |window, _view| {
                 if let Some(page) = weak.upgrade() {
                     page.created(window);
@@ -586,6 +652,8 @@ impl Shared {
             WebGo::Upload { reference, selector, files } => agent::upload(self, reference.as_deref(), selector.as_deref(), files, token),
             WebGo::ScreenshotDiff { baseline, threshold, clip, current, diff } => agent::screenshot_diff(self, baseline, *threshold, *clip, current.as_deref(), diff.as_deref(), token),
             WebGo::Record(record) => agent::record(self, record, token),
+            // Done by `views::update`, whichever engine wrote the file.
+            WebGo::Download { .. } => {}
         }
     }
 
@@ -638,12 +706,27 @@ impl Shared {
                 }
             });
         }
+        // CEF makes a popup's browser while its opener waits on `window.open`, when its DevTools channel takes nothing
+        // yet: it is opened once that is over.
+        if self.popup.is_some() {
+            let (page, again) = (weak_of(self), browser.clone());
+            return super::next_turn(move || {
+                if let Some(page) = page.upgrade().filter(|page| !page.closed.get()) {
+                    page.go_on(&again);
+                }
+            });
+        }
         self.go_on(browser);
     }
 
     /// Its browser is ready to go on: to its channel first, for a plugin that may run scripts in its pages.
     fn go_on(&self, browser: &Browser) {
         if !self.scripts {
+            // A window a page opens waits for a debugger before it runs (`popup_waits`), and nothing else lets it go.
+            if self.popup.is_some() {
+                let (method, params) = agent::popup_waits();
+                super::devtools::once(browser, method, params, |_| {});
+            }
             return self.readied(Ok(()));
         }
         let page = weak_of(self);
@@ -666,7 +749,7 @@ impl Shared {
         if let Err(why) = result {
             eprintln!("[chromium] a page's DevTools channel isn't readied, so nothing reads or acts on it: {why}");
         }
-        if self.scripts || self.clear_first.get() {
+        if (self.scripts || self.clear_first.get()) && self.popup.is_none() {
             let start = self.start.borrow().clone();
             match self.browser.borrow().as_ref().and_then(Browser::main_frame) {
                 Some(frame) if start != "about:blank" => frame.load_url(Some(&CefString::from(start.as_str()))),
@@ -803,6 +886,17 @@ impl Shared {
     }
 }
 
+/// CEF made the browser view of a window a page opened (`frameless::OnPopup`): the popup page made for it puts it in a
+/// window of its own. CEF calls this before the popup's `on_after_created` (measured in 158), so the page is the oldest
+/// popup page with neither a browser nor a window yet, as CEF makes popups in the order they are asked for. False for
+/// one no page made, which CEF opens in a window of its own.
+fn host_popup(view: &BrowserView) -> bool {
+    let page = PAGES.with_borrow(|pages| {
+        pages.iter().filter_map(Weak::upgrade).find(|page| page.popup.is_some() && !page.closed.get() && page.browser.borrow().is_none() && page.window.borrow().is_none())
+    });
+    page.inspect(|page| page.host(view)).is_some()
+}
+
 /// The Wings window `window` is, in AppKit.
 fn ns_window_of(window: &Window) -> Option<Retained<NSWindow>> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
@@ -869,7 +963,7 @@ wrap_client! {
             Some(Refuse::new())
         }
         fn download_handler(&self) -> Option<DownloadHandler> {
-            Some(NoDownloads::new())
+            Some(PageDownloads::new(self.page.clone()))
         }
     }
 }
@@ -880,31 +974,55 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
-        /// A link that opens a new window (`target="_blank"`, `window.open`) loads in this page, as in WebKit: a page has
-        /// one view, and no Chrome window opens.
+        /// A link that opens a new window (`target="_blank"`, `window.open`) opens as a tab of its own: CEF makes its
+        /// browser, with its opener, so `window.opener` and `postMessage` back work as a sign-in in a window needs, and
+        /// Wings puts it in a window of its own (`host_popup`). Only one your click led to, as Chrome's blocker does; the
+        /// page hears of one it opened by itself. A page that doesn't show such tabs loads one you clicked in itself.
         fn on_before_popup(
             &self,
             browser: Option<&mut Browser>,
             _frame: Option<&mut Frame>,
-            _popup_id: ::std::os::raw::c_int,
+            popup_id: ::std::os::raw::c_int,
             target_url: Option<&CefString>,
             _target_frame_name: Option<&CefString>,
-            _target_disposition: WindowOpenDisposition,
-            _user_gesture: ::std::os::raw::c_int,
+            target_disposition: WindowOpenDisposition,
+            user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&PopupFeatures>,
             _window_info: Option<&mut WindowInfo>,
-            _client: Option<&mut Option<Client>>,
+            client: Option<&mut Option<Client>>,
             _settings: Option<&mut BrowserSettings>,
             _extra_info: Option<&mut Option<DictionaryValue>>,
             _no_javascript_access: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
             let url = text(target_url);
-            if crate::web::may_navigate(&url, true)
-                && let Some(frame) = browser.and_then(|browser| browser.main_frame())
-            {
-                frame.load_url(Some(&CefString::from(url.as_str())));
+            // A window opened with no address is blank until its opener sends it somewhere.
+            let Some(opener) = self.page.upgrade().filter(|_| url.is_empty() || crate::web::may_navigate(&url, true)) else { return 1 };
+            if !opener.told.popups() {
+                if user_gesture != 0
+                    && !url.is_empty()
+                    && let Some(frame) = browser.and_then(|browser| browser.main_frame())
+                {
+                    frame.load_url(Some(&CefString::from(url.as_str())));
+                }
+                return 1;
             }
-            1
+            if user_gesture == 0 {
+                opener.told.tell(Heard::Blocked { url });
+                return 1;
+            }
+            let Some(client) = client else { return 1 };
+            let popup = opener.opened_popup(popup_id, &url, target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB);
+            *client = Some(PageClient::new(Rc::downgrade(&popup)));
+            0
+        }
+
+        /// CEF didn't make the window after all: its tab closes.
+        fn on_before_popup_aborted(&self, browser: Option<&mut Browser>, popup_id: ::std::os::raw::c_int) {
+            let Some(opener) = browser.map(|browser| browser.identifier()) else { return };
+            let popup = PAGES.with_borrow(|pages| pages.iter().filter_map(Weak::upgrade).find(|page| page.popup == Some((opener, popup_id))));
+            if let Some(popup) = popup {
+                popup.told.tell(Heard::Closed);
+            }
         }
 
         fn on_after_created(&self, browser: Option<&mut Browser>) {
@@ -916,8 +1034,11 @@ wrap_life_span_handler! {
         }
 
         fn on_before_close(&self, browser: Option<&mut Browser>) {
-            if let Some(browser) = browser {
-                runtime::closed(browser);
+            let Some(browser) = browser else { return };
+            runtime::closed(browser);
+            // Closing while Wings didn't close it: the page closed its own window (`window.close()`), and its tab closes.
+            if let Some(page) = self.page.upgrade().filter(|page| !page.closed.get() && page.browser_is(Some(browser))) {
+                page.told.tell(Heard::Closed);
             }
         }
     }
@@ -931,7 +1052,7 @@ wrap_load_handler! {
     impl LoadHandler {
         fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             // The blank page it shows until it is ready says nothing.
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.telling()) else { return };
             {
                 let mut now = page.now.borrow_mut();
                 now.loading = is_loading != 0;
@@ -955,7 +1076,7 @@ wrap_load_handler! {
         }
 
         fn on_load_error(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, _failed_url: Option<&CefString>) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.telling()) else { return };
             // A load stopped by another (a click before the page finished) isn't a failure the person needs to see.
             if frame.is_none_or(|frame| frame.is_main() == 0) || error_code == Errorcode::ABORTED {
                 return;
@@ -987,7 +1108,7 @@ wrap_display_handler! {
 
     impl DisplayHandler {
         fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.telling()) else { return };
             if frame.is_some_and(|frame| frame.is_main() != 0) {
                 page.now.borrow_mut().url = text(url);
                 page.tell();
@@ -996,7 +1117,7 @@ wrap_display_handler! {
         }
 
         fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
-            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.ready.get()) else { return };
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.telling()) else { return };
             page.now.borrow_mut().title = text(title);
             page.tell();
         }
@@ -1033,13 +1154,24 @@ wrap_request_handler! {
             1
         }
 
-        /// A link opened in a new tab (Cmd-click, a middle click) loads in this page, as in WebKit.
-        fn on_open_urlfrom_tab(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, target_url: Option<&CefString>, _target_disposition: WindowOpenDisposition, _user_gesture: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+        /// A link opened in a new tab (Cmd-click, a middle click) opens in a tab of its own, behind this one for a
+        /// background tab; a page that doesn't show such tabs loads it in itself.
+        fn on_open_urlfrom_tab(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, target_url: Option<&CefString>, target_disposition: WindowOpenDisposition, user_gesture: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
             let url = text(target_url);
-            if crate::web::may_navigate(&url, true)
-                && let Some(frame) = browser.and_then(|browser| browser.main_frame())
-            {
-                frame.load_url(Some(&CefString::from(url.as_str())));
+            if !crate::web::may_navigate(&url, true) {
+                return 1;
+            }
+            match self.page.upgrade().filter(|page| page.told.popups()) {
+                // One a script asked for, as with a made-up Cmd-click, is no tab of yours.
+                Some(page) if user_gesture == 0 => page.told.tell(Heard::Blocked { url }),
+                Some(page) => page.told.tell(Heard::Popup { popup: None, url, background: target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB }),
+                None => {
+                    if user_gesture != 0
+                        && let Some(frame) = browser.and_then(|browser| browser.main_frame())
+                    {
+                        frame.load_url(Some(&CefString::from(url.as_str())));
+                    }
+                }
             }
             1
         }
@@ -1134,7 +1266,81 @@ wrap_permission_handler! {
     }
 }
 
-// WebKit in Wings downloads nothing (its navigation delegate takes no download), and neither does Chromium.
+// A page whose node hears its downloads (`onDownload`) gets them into ~/Downloads (`downloads`), each its document may
+// start (`downloads::Gate`); any other downloads nothing. Returning 0 from `on_before_download` would hand it to Chrome's
+// own downloads, so every way out returns 1: one never continued is canceled.
+wrap_download_handler! {
+    struct PageDownloads {
+        page: Weak<Shared>,
+    }
+
+    impl DownloadHandler {
+        /// CEF asks this only of one your click started (a link to an attachment, Alt-click): it counts as yours.
+        fn can_download(&self, browser: Option<&mut Browser>, url: Option<&CefString>, _request_method: Option<&CefString>) -> ::std::os::raw::c_int {
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser) && page.told.downloads()) else { return 0 };
+            let mut asked = page.asked.borrow_mut();
+            asked.push(text(url));
+            let extra = asked.len().saturating_sub(8);
+            asked.drain(..extra);
+            1
+        }
+
+        fn on_before_download(&self, browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, suggested_name: Option<&CefString>, callback: Option<&mut BeforeDownloadCallback>) -> ::std::os::raw::c_int {
+            let (Some(page), Some(item), Some(callback)) = (self.page.upgrade().filter(|page| page.browser_is(browser) && page.told.downloads()), download_item, callback) else { return 1 };
+            let url = CefString::from(&item.url()).to_string();
+            let user = {
+                let mut asked = page.asked.borrow_mut();
+                asked.iter().position(|one| *one == url).map(|at| asked.remove(at)).is_some()
+            };
+            if !page.gate.borrow_mut().allow(page.generation.get(), user) {
+                downloads::blocked(&page.told, &url, &text(suggested_name));
+                return 1;
+            }
+            let (weak, cef_id) = (Rc::downgrade(&page), item.id());
+            let stop: Rc<dyn Fn()> = Rc::new(move || {
+                if let Some(stop) = weak.upgrade().and_then(|page| page.stops.borrow_mut().remove(&cef_id)) {
+                    stop.cancel();
+                }
+            });
+            let Some((id, path)) = downloads::begin(&page.told, &page.profile, &url, &page.url_now(), &text(suggested_name), stop) else { return 1 };
+            page.downloads.borrow_mut().insert(cef_id, id);
+            callback.cont(Some(&CefString::from(path.to_string_lossy().as_ref())), 0);
+            1
+        }
+
+        fn on_download_updated(&self, browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, callback: Option<&mut DownloadItemCallback>) {
+            let (Some(page), Some(item)) = (self.page.upgrade().filter(|page| page.browser_is(browser)), download_item) else { return };
+            let cef_id = item.id();
+            let Some(id) = page.downloads.borrow().get(&cef_id).copied() else { return };
+            let ended = item.is_complete() != 0 || item.is_canceled() != 0 || item.is_interrupted() != 0;
+            if ended {
+                page.downloads.borrow_mut().remove(&cef_id);
+                page.stops.borrow_mut().remove(&cef_id);
+            } else if let Some(callback) = callback {
+                page.stops.borrow_mut().insert(cef_id, callback.clone());
+            }
+            if item.is_complete() != 0 {
+                let path = CefString::from(&item.full_path()).to_string();
+                downloads::finished(id, (!path.is_empty()).then(|| PathBuf::from(path)));
+            } else if item.is_canceled() != 0 {
+                downloads::canceled(id);
+            } else if item.is_interrupted() != 0 {
+                downloads::failed(id, &interrupted(&format!("{:?}", item.interrupt_reason())));
+            } else {
+                let total = item.total_bytes();
+                downloads::progress(id, item.received_bytes().max(0) as u64, (total > 0).then_some(total as u64));
+            }
+        }
+    }
+}
+
+/// What a page says of a download Chromium stopped, from the reason's name (`CEF_DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED`).
+fn interrupted(reason: &str) -> String {
+    let name = reason.rsplit("CEF_DOWNLOAD_INTERRUPT_REASON_").next().unwrap_or_default().trim_end_matches(')');
+    if name.is_empty() || name == reason { "The download stopped".into() } else { format!("The download stopped ({name})") }
+}
+
+// A window Chrome opened by itself, or an extension's popup, downloads nothing.
 wrap_download_handler! {
     pub(super) struct NoDownloads {}
 
@@ -1142,11 +1348,22 @@ wrap_download_handler! {
         fn can_download(&self, _browser: Option<&mut Browser>, _url: Option<&CefString>, _request_method: Option<&CefString>) -> ::std::os::raw::c_int {
             0
         }
+
+        /// One that started by itself, which `can_download` isn't asked of: 0 would hand it to Chrome's own downloads.
+        fn on_before_download(&self, _browser: Option<&mut Browser>, _download_item: Option<&mut DownloadItem>, _suggested_name: Option<&CefString>, _callback: Option<&mut BeforeDownloadCallback>) -> ::std::os::raw::c_int {
+            1
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stopped_download_says_why_with_chromiums_name_for_it() {
+        assert_eq!(super::interrupted("DownloadInterruptReason(CEF_DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED)"), "The download stopped (NETWORK_FAILED)");
+        assert_eq!(super::interrupted("something else"), "The download stopped");
+    }
+
     #[test]
     fn a_failed_load_says_why_in_words_with_chromiums_name_for_it() {
         assert_eq!(super::load_error("net::ERR_NAME_NOT_RESOLVED"), "A server with that name couldn't be found (ERR_NAME_NOT_RESOLVED)");

@@ -149,6 +149,8 @@ pub mod icons {
     ];
     /// `minimize-2`: two arrows in, as Put back.
     pub const MINIMIZE_2: [&str; 4] = ["m14 10 7-7", "M20 10h-6V4", "m3 21 7-7", "M4 14h6v6"];
+    /// `download`: an arrow down into a tray.
+    pub const DOWNLOAD: [&str; 3] = ["M12 15V3", "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5"];
     pub const PANEL_RIGHT: [&str; 2] = ["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M15 3v18"];
 }
 

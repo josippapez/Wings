@@ -1,8 +1,8 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "0.4.2",
-  "minWingsVersion": "0.2.129",
+  "version": "0.5.0",
+  "minWingsVersion": "0.2.132",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions, with Chromium as an engine you can download for Chrome extensions.",
   "api": 1,
@@ -748,8 +748,16 @@
             "action"
           ]
         }
+      },
+      {
+        "name": "downloads",
+        "description": "Lists the files your Browser tabs downloaded, newest first: each one's name, where it was saved (~/Downloads), its state (progress, done, failed, canceled, or blocked when the page tried more than one download by itself) and size. A click on a download link or a page answering with an attachment downloads; nothing downloaded is ever opened. Only your own tabs' downloads.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
       }
     ],
-    "mcpInstructions": "Browser (browser__*): the user's real browser in Wings. Each agent gets its own tab group, never the user's tabs. browser__open a url (new_tab; browser__tabs), browser__snapshot for refs, then click, fill, type, press, wait_for; screenshot to see. Also upload, screenshot_diff, recording, webmcp; demonstrate to have the user show a flow; handoff for sign-in. File paths: /tmp or $TMPDIR, or relative (saved in the Browser's folder)."
+    "mcpInstructions": "Browser (browser__*): the user's real browser in Wings. Each agent gets its own tab group, never the user's tabs. browser__open a url (new_tab; browser__tabs), browser__snapshot for refs, then click, fill, type, press, wait_for; screenshot to see. Also upload, screenshot_diff, recording, webmcp, downloads (files your tabs saved); demonstrate to have the user show a flow; handoff for sign-in. File paths: /tmp or $TMPDIR, or relative (saved in the Browser's folder)."
   }
 }

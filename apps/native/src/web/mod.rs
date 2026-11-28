@@ -9,6 +9,7 @@
 //! (`views::overlaid`). A WebKit page can't, so it hides while an overlay that takes clicks or a backdrop lies over it.
 //! It is gone with its node or its page.
 
+pub mod downloads;
 pub mod engine;
 pub mod extensions;
 pub mod folders;
@@ -100,14 +101,18 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
         // An extension's button opens its own popup, which the plugin never sees, on any page: it needs your click
         // (`needs_click`) and nothing more.
         WebGo::Extension(_) => Ok(()),
+        // A file the page's views downloaded, never the page itself.
+        WebGo::Download { .. } => Ok(()),
     }
 }
 
 /// Whether the command `go` runs only right after your click in the page, which it uses up, as `copyText` does: an
 /// extension's button tells the extension you acted on the page (`activeTab`) and opens its popup, which takes the
-/// keyboard, so neither a plugin nor an agent clicks it alone.
+/// keyboard, so neither a plugin nor an agent clicks it alone. A downloaded file opens in its app, or shows in Finder,
+/// only for you as well: a file a website wrote is never opened for it.
 pub fn needs_click(go: &crate::page::tree::WebGo) -> bool {
-    matches!(go, crate::page::tree::WebGo::Extension(_))
+    use crate::page::tree::{WebDownload, WebGo};
+    matches!(go, WebGo::Extension(_) | WebGo::Download { act: WebDownload::Open | WebDownload::Reveal, .. })
 }
 
 /// Why an extension's button didn't open without a click.
@@ -619,6 +624,17 @@ mod tests {
         let button = WebGo::Extension("e1".into());
         assert!(needs_click(&button));
         assert_eq!(gate(&button, false, true, false), Ok(()));
+    }
+
+    /// A downloaded file is shown in Finder or opened only on your click, on any page; a download under way stops without one.
+    #[test]
+    fn a_download_opens_or_shows_only_on_your_click_and_stops_without_one() {
+        use crate::page::tree::{WebDownload, WebGo};
+        for act in [WebDownload::Reveal, WebDownload::Open, WebDownload::Cancel] {
+            let go = WebGo::Download { id: 1, act };
+            assert_eq!(gate(&go, false, true, false), Ok(()), "{act:?} reads nothing of the page");
+            assert_eq!(needs_click(&go), act != WebDownload::Cancel, "{act:?}");
+        }
     }
 
     #[test]

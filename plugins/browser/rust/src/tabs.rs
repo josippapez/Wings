@@ -42,6 +42,11 @@ pub struct Tab {
     /// When an agent last used it or the person last chose it (the clock's milliseconds): none until the first idle check, which
     /// starts its count, so a tab restored at launch isn't closed at once.
     pub used: Option<f64>,
+    /// The view Wings made for the window another tab's page opened, which this tab shows (`WebPopup::popup`), and that tab.
+    pub popup: Option<u64>,
+    pub opened_by: Option<String>,
+    /// The address of the last window its page opened by itself, which wasn't opened.
+    pub blocked: Option<String>,
 }
 
 impl Tab {
@@ -63,6 +68,9 @@ impl Tab {
             opening: None,
             clearing_site: None,
             used: None,
+            popup: None,
+            opened_by: None,
+            blocked: None,
         }
     }
 
@@ -200,6 +208,28 @@ impl Tabs {
         id
     }
 
+    /// A tab for the window the page of `opener` opened at `url`: in the opener's group, after the opener and the tabs it
+    /// opened before, showing `popup`, the view Wings made for it, or else loading `url`. Unless it opens in the background
+    /// it becomes its group's tab, and the person sees it where they see the opener. None when the opener is gone.
+    pub fn open_from(&mut self, opener: &str, url: &str, popup: Option<u64>, background: bool) -> Option<String> {
+        let at = self.list.iter().position(|tab| tab.id == opener)?;
+        let after = self.list[at + 1..].iter().take_while(|tab| tab.opened_by.as_deref() == Some(opener)).count();
+        let group = self.list[at].group.clone();
+        let id = format!("t{}", self.next);
+        self.next += 1;
+        let mut tab = Tab::new(id.clone(), group.clone(), Some(url));
+        (tab.popup, tab.opened_by) = (popup, Some(opener.to_owned()));
+        self.list.insert(at + 1 + after, tab);
+        if !background {
+            let shown = self.active == opener;
+            self.select(&id);
+            if shown {
+                self.activate(&id);
+            }
+        }
+        Some(id)
+    }
+
     /// Shows `id` to the person and keeps it as the tab of its group (or their own).
     pub fn activate(&mut self, id: &str) {
         let Some(group) = self.get(id).map(|tab| tab.group.clone()) else { return };
@@ -259,7 +289,9 @@ impl Tabs {
             return tokens;
         }
         let after = self.order();
-        let next = after.get(place.min(after.len().saturating_sub(1))).cloned().unwrap_or_default();
+        // A window a page opened gives way to its opener, as a sign-in's window does once it is done.
+        let opener = gone.opened_by.filter(|opener| self.get(opener).is_some());
+        let next = opener.unwrap_or_else(|| after.get(place.min(after.len().saturating_sub(1))).cloned().unwrap_or_default());
         if self.own_active.as_deref() == Some(id) {
             self.own_active = self.of("").last().map(|tab| tab.id.clone());
         }
@@ -509,6 +541,33 @@ mod tests {
         assert_eq!(tabs.tab_of_token(9), None);
         assert_eq!(tabs.close(&b), vec![2], "what the closed tab was still asked is given back");
         assert_eq!(tabs.run("nope", |token| json!({ "token": token })), None);
+    }
+
+    /// A window a page opens is a tab after its opener (and the ones it opened before), in its group, shown where the
+    /// opener was shown; a background one stays behind.
+    #[test]
+    fn a_window_a_page_opens_is_a_tab_beside_its_opener_in_its_group() {
+        let mut tabs = Tabs::new(Some("https://mine.com/"), None);
+        tabs.open(None, Some("https://other.com/"));
+        tabs.activate("t1");
+        let sign_in = tabs.open_from("t1", "https://login.example/", Some(4), false).unwrap();
+        assert_eq!(ids(&tabs), ["t1", "t3", "t2"], "next to its opener, not at the end");
+        assert_eq!(tabs.active, sign_in, "the person saw the opener, so they see it");
+        assert_eq!(tabs.get(&sign_in).map(|tab| (tab.popup, tab.start.as_str(), tab.blank)), Some((Some(4), "https://login.example/", false)));
+        tabs.activate("t1");
+        let behind = tabs.open_from("t1", "https://docs.example/", None, true).unwrap();
+        assert_eq!(ids(&tabs), ["t1", "t3", "t4", "t2"], "after the tab it opened before");
+        assert_eq!((tabs.active.as_str(), tabs.get(&behind).unwrap().popup), ("t1", None), "a background tab stays behind");
+        // An agent's page opens a window: in its group, and its group's tab, without moving the person.
+        let agent = tabs.open(Some(A), Some("https://a.com/"));
+        let popup = tabs.open_from(&agent, "https://login.example/", Some(5), false).unwrap();
+        assert_eq!((tabs.get(&popup).unwrap().group.as_deref(), tabs.target("ses-a")), (Some("ses-a"), Some(popup.clone())));
+        assert_eq!(tabs.active, "t1");
+        assert_eq!(tabs.open_from("t99", "https://x.example/", None, false), None, "its opener closed");
+        // Closing a window that is shown shows its opener again, not the tab beside it.
+        tabs.activate(&sign_in);
+        tabs.close(&sign_in);
+        assert_eq!(tabs.active, "t1");
     }
 
     #[test]

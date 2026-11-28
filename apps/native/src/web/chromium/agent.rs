@@ -239,6 +239,14 @@ pub fn setup() -> Vec<(&'static str, Value)> {
     ]
 }
 
+/// A window a page opens (`window.open`, a link to a new one) waits for a debugger before it runs, which nothing attached
+/// to it lets go: the opener's `window.open` never returned and the window never loaded until this did (measured in
+/// Chromium 158, where Wings' sessions auto-attach to workers and frames with `waitForDebuggerOnStart`). Its own channel
+/// sends it once the watch is in, so its first page is watched too.
+pub fn popup_waits() -> (&'static str, Value) {
+    ("Runtime.runIfWaitingForDebugger", json!({}))
+}
+
 /// What readies a frame of another site, waiting to start, before it runs: the watch, and the same for its own frames.
 /// `Runtime.runIfWaitingForDebugger` follows, whatever these answer.
 pub fn frame_setup() -> Vec<(&'static str, Value)> {
@@ -316,7 +324,10 @@ pub fn open(page: &Shared, browser: &cef::Browser, done: impl FnOnce(Result<(), 
     let Some(channel) = Channel::open(browser, weak_of(page)) else { return done(Err("Chromium's DevTools didn't open".into())) };
     let channel = Rc::new(channel);
     page.agent.channel.replace(Some(channel.clone()));
-    let steps = setup();
+    let mut steps = setup();
+    if page.is_popup() {
+        steps.push(popup_waits());
+    }
     let left = Rc::new(Cell::new(steps.len()));
     let failed: Rc<RefCell<Option<String>>> = Rc::default();
     let done: Rc<RefCell<Option<Box<dyn FnOnce(Result<(), String>)>>>> = Rc::new(RefCell::new(Some(Box::new(done))));

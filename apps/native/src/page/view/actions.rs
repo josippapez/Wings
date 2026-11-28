@@ -99,22 +99,24 @@ impl PageView {
         }
         self.web_handlers = found
             .iter()
-            .map(|web| (SharedString::from(web.name.clone()), (web.on_state.clone(), web.on_result.clone())))
+            .map(|web| {
+                let handlers = WebHandlers {
+                    state: web.on_state.clone(),
+                    result: web.on_result.clone(),
+                    popup: web.on_popup.clone(),
+                    close: web.on_close.clone(),
+                    download: web.on_download.clone(),
+                };
+                (SharedString::from(web.name.clone()), handlers)
+            })
             .collect();
         let told = self.web_told.get_or_insert_with(|| {
             let (told, hear) = async_channel::unbounded::<(SharedString, crate::web::Heard)>();
             self._web_events = Some(cx.spawn(async move |view, cx| {
                 while let Ok((name, heard)) = hear.recv().await {
-                    let (payload, result) = match heard {
-                        crate::web::Heard::State(state) => (serde_json::to_value(&state).unwrap_or_default(), false),
-                        crate::web::Heard::Result { token, result: Ok(value) } => (serde_json::json!({ "token": token, "value": value }), true),
-                        crate::web::Heard::Result { token, result: Err(error) } => (serde_json::json!({ "token": token, "error": error }), true),
-                    };
                     let sent = view.update(cx, |view, _| {
-                        let handlers = view.web_handlers.get(&name);
-                        let handler = handlers.and_then(|(state, done)| if result { done.as_ref() } else { state.as_ref() });
-                        if let Some(handler) = handler {
-                            view.send(handler, Some(&payload));
+                        if let Some((handler, payload)) = view.web_handler(&name, heard) {
+                            view.send(&handler, Some(&payload));
                         }
                     });
                     if sent.is_err() {
@@ -133,19 +135,57 @@ impl PageView {
                 commands: web.commands.clone(),
                 hidden: web.hidden,
                 live: web.live,
+                popup: web.popup,
+                popups: web.on_popup.is_some(),
+                downloads: web.on_download.is_some(),
             })
             .collect();
         let runtime = self.runtime.as_ref();
         crate::web::update(cx.entity_id(), &profile, &specs, told, self.web_scripts, &mut || runtime.is_some_and(|runtime| runtime.take_gesture()));
     }
 
+    /// The handler of the web view `name` that hears `heard`, and what it hears. A download whose view is gone (its tab
+    /// closed while it went on) is heard by another view of the page that hears downloads.
+    fn web_handler(&self, name: &SharedString, heard: crate::web::Heard) -> Option<(String, serde_json::Value)> {
+        use crate::web::Heard;
+        let handlers = self.web_handlers.get(name);
+        let (handler, payload) = match heard {
+            Heard::State(state) => (handlers?.state.clone(), serde_json::to_value(&state).unwrap_or_default()),
+            Heard::Result { token, result: Ok(value) } => (handlers?.result.clone(), serde_json::json!({ "token": token, "value": value })),
+            Heard::Result { token, result: Err(error) } => (handlers?.result.clone(), serde_json::json!({ "token": token, "error": error })),
+            Heard::Popup { popup, url, background } => (handlers?.popup.clone(), serde_json::json!({ "url": url, "background": background, "popup": popup })),
+            Heard::Blocked { url } => (handlers?.popup.clone(), serde_json::json!({ "url": url, "blocked": true })),
+            Heard::Closed => (handlers?.close.clone(), serde_json::Value::Null),
+            Heard::Download(report) => {
+                let own = handlers.and_then(|handlers| handlers.download.clone());
+                let any = || self.web_handlers.values().find_map(|handlers| handlers.download.clone());
+                (own.or_else(any), serde_json::to_value(&report).unwrap_or_default())
+            }
+        };
+        Some((handler?, payload))
+    }
+
     /// Tells the page what its web view `name` says of itself, as WebKit would, for the screenshots, which have no web
     /// engine. False when the page has no such web view.
     #[cfg(feature = "test-support")]
     pub fn tell_web_state(&self, name: &str, state: &serde_json::Value) -> bool {
-        let handler = self.web_handlers.get(name).and_then(|(on_state, _)| on_state.clone());
+        self.tell_web(name, "state", state)
+    }
+
+    /// Tells the page an event of its web view `name` (`state`, `popup`, `close` or `download`), as an engine would, for
+    /// the screenshots. False when the page has no such web view or it doesn't hear that.
+    #[cfg(feature = "test-support")]
+    pub fn tell_web(&self, name: &str, event: &str, payload: &serde_json::Value) -> bool {
+        let handlers = self.web_handlers.get(name);
+        let handler = handlers.and_then(|handlers| match event {
+            "state" => handlers.state.clone(),
+            "popup" => handlers.popup.clone(),
+            "close" => handlers.close.clone(),
+            "download" => handlers.download.clone(),
+            _ => None,
+        });
         handler.is_some_and(|handler| {
-            self.send(&handler, Some(state));
+            self.send(&handler, Some(payload));
             true
         })
     }
@@ -568,4 +608,14 @@ impl PageView {
         window.prevent_default();
         cx.stop_propagation();
     }
+}
+
+/// What a `WebView`'s node hears, by its handlers.
+#[derive(Default)]
+pub(super) struct WebHandlers {
+    state: Option<String>,
+    result: Option<String>,
+    popup: Option<String>,
+    close: Option<String>,
+    download: Option<String>,
 }

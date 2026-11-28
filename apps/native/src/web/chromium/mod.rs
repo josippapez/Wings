@@ -13,7 +13,7 @@
 mod agent;
 pub mod cookies;
 #[cfg(debug_assertions)]
-mod debug;
+pub(crate) mod debug;
 mod devtools;
 pub mod extensions;
 mod focus;

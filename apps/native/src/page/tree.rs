@@ -391,6 +391,18 @@ pub struct WebView {
     pub hidden: bool,
     /// With `hidden`: the engine keeps it rendering, so screenshots and scripts work on it.
     pub live: bool,
+    /// The view the engine already made for a window another of the page's views opened (`onPopup`'s `popup`): the node
+    /// takes it, with its opener, rather than loading `url`.
+    pub popup: Option<u64>,
+    /// Hears a window the page opens (`target="_blank"`, `window.open`, a Cmd-click): `{ url, background, popup }` for one
+    /// to show as a tab, `popup` the view made for it; `{ url, blocked: true }` for one opened with no click. A view with
+    /// none of it loads such a link in itself.
+    pub on_popup: Option<String>,
+    /// Hears that the page closed its own window (`window.close()` in a window a script opened).
+    pub on_close: Option<String>,
+    /// Hears each download's state: `{ id, url, name, path, state, received, total, error }`. A view with none downloads
+    /// nothing.
+    pub on_download: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -427,6 +439,19 @@ pub enum WebGo {
     ScreenshotDiff { baseline: String, threshold: f64, clip: Option<[f64; 4]>, current: Option<String>, diff: Option<String> },
     /// A recording of the page as an .mp4 (Chromium only).
     Record(WebRecord),
+    /// Acts on a file the page's views downloaded (`onDownload`'s `id`), never on another path.
+    Download { id: u64, act: WebDownload },
+}
+
+/// What a `download` command does to a download, by its `do`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebDownload {
+    /// Shows the file in Finder.
+    Reveal,
+    /// Opens the finished file in its app, as a double click in Finder does.
+    Open,
+    /// Stops one under way and drops what it wrote.
+    Cancel,
 }
 
 /// A file an `upload` command gives the page.
@@ -598,6 +623,15 @@ fn web_command(value: &Value) -> Option<WebCommand> {
         "upload" => web_upload(value)?,
         "screenshotDiff" => web_screenshot_diff(value)?,
         "record" => web_record(value)?,
+        "download" => WebGo::Download {
+            id: value.get("id")?.as_u64()?,
+            act: match value.get("do")?.as_str()? {
+                "reveal" => WebDownload::Reveal,
+                "open" => WebDownload::Open,
+                "cancel" => WebDownload::Cancel,
+                _ => return None,
+            },
+        },
         _ => return None,
     };
     Some(WebCommand { go, token })
@@ -1874,6 +1908,10 @@ impl Walk {
                 on_result: handler("onResult"),
                 hidden: on("hidden"),
                 live: on("live"),
+                popup: props.get("popup").and_then(Value::as_u64),
+                on_popup: handler("onPopup"),
+                on_close: handler("onClose"),
+                on_download: handler("onDownload"),
             }),
             "Avatar" => Node::Avatar(Avatar {
                 id,

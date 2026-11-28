@@ -439,6 +439,9 @@ pub fn switches(piped: bool) -> Vec<String> {
         // than showing Chrome's own login dialog.
         "disable-blink-features=DocumentPictureInPictureAPI",
         "disable-chrome-login-prompt",
+        // A window a page opens with no click of yours is refused by Wings, which tells the page's plugin of it
+        // (`page::PageLifeSpan::on_before_popup`): Chrome's own blocker refused it before Wings heard of it.
+        "disable-popup-blocking",
         // Nor do two features the switches above leave on: the omnibox's AI Mode asking Google whether this Chromium
         // may use it (`aim_eligibility_fetch`, www.google.com/async/folae), and connecting ahead of time to the default
         // search engine, Google (`SearchEnginePreconnector`). Nor a spare page process started ahead of the next page
@@ -687,6 +690,7 @@ mod tests {
             "disable-breakpad",
             "disable-blink-features=DocumentPictureInPictureAPI",
             "disable-chrome-login-prompt",
+            "disable-popup-blocking",
             "disable-features=AimEnabled,PreconnectToSearch,SpareRendererForSitePerProcess",
             "optimization-guide-manifest-override=/dev/null",
         ] {

@@ -7,6 +7,8 @@
 //!   page's window (or the popup's), as AppKit sends a typed one.
 //! - `click <wings|page|popup> <x> <y>`: posts a left click at `x`, `y` points from the top left of that window's
 //!   content to the app's event queue, so AppKit handles it as a click of the mouse, a window that isn't key included.
+//! - `click web <x> <y> [cmd]`: the same at `x`, `y` points from the top left of the web page that shows, a WebKit one
+//!   when no Chromium page is open, with Cmd held for `cmd`.
 //! - `unload`: takes the first extension out of Chromium as turning it off does (`extensions::unload`).
 //! - `clear`: clears the first page's profile's Chromium data as Clear data does (`page::clear_data`).
 //! - `windows`: every window of the app, with its frame, level and whether it shows and has the keyboard.
@@ -98,6 +100,34 @@ fn run(command: &str) -> String {
                 _ => page.parent.borrow().iter().for_each(|parent| parent.makeKeyWindow()),
             }
             format!("key window now {}", key_window(mtm, page))
+        }
+        (Some("click"), Some("web")) => {
+            let (Some(x), Some(y)) = (words.next().and_then(|x| x.parse::<f64>().ok()), words.next().and_then(|y| y.parse::<f64>().ok())) else { return "click takes x and y".into() };
+            let flags = if words.next() == Some("cmd") { NSEventModifierFlags::Command } else { NSEventModifierFlags::empty() };
+            let target = match &first {
+                Some(page) => page.ns.borrow().clone().map(|window| {
+                    let height = window.contentView().map_or(0.0, |content| content.frame().size.height);
+                    (window, NSPoint::new(x, height - y))
+                }),
+                None => crate::web::mac::shown_page_point(x, y, mtm),
+            };
+            let Some((window, at)) = target else { return "no page shows".into() };
+            let app = NSApplication::sharedApplication(mtm);
+            for kind in [NSEventType::LeftMouseDown, NSEventType::LeftMouseUp] {
+                let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                    kind, at, flags, 0.0, window.windowNumber(), None, 0, 1, 1.0,
+                );
+                let Some(event) = event else { continue };
+                // On a locked Mac the app is never active, and a WebKit page in a window that isn't key takes no first
+                // click, which only makes the window key: the press goes to the page itself, through what Wings' own
+                // monitor of presses does with one (`mac::debug_press`).
+                if first.is_none() {
+                    crate::web::mac::debug_press(&event, mtm);
+                } else {
+                    app.postEvent_atStart(&event, false);
+                }
+            }
+            format!("clicked at {:.0},{:.0} of window #{}", at.x, at.y, window.windowNumber())
         }
         (Some("click"), Some(which)) => {
             let Some(page) = &first else { return "no page".into() };

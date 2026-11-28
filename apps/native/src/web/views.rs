@@ -4,7 +4,10 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use gpui::{App, Bounds, EntityId, IntoElement, Pixels, SharedString, Styled, Window, WindowId, canvas};
@@ -27,6 +30,12 @@ pub struct Spec {
     pub hidden: bool,
     /// With `hidden`: the engine keeps it rendering, so its screenshots and scripts work.
     pub live: bool,
+    /// The view the engine made for a window another view of the page opened, which this one takes (`popup`).
+    pub popup: Option<u64>,
+    /// Its node hears the windows its page opens (`onPopup`) and its downloads (`onDownload`): without, a link to a new
+    /// window loads in it and nothing downloads.
+    pub popups: bool,
+    pub downloads: bool,
 }
 
 /// Where a web view is, which its page hears with `onState`.
@@ -102,28 +111,87 @@ pub enum Heard {
     State(State),
     /// What the `eval` or `snapshot` command of `token` came to: its value as JSON, or why it failed.
     Result { token: u64, result: Result<serde_json::Value, String> },
+    /// The page opened a window at `url` (a link to a new one, `window.open`, a Cmd-click), to show as a tab, in the
+    /// background for a Cmd-click: `popup` is the view the engine made for it, which keeps its opener, for the node that
+    /// takes it (`Spec::popup`), and none for a plain new tab at `url`.
+    Popup { popup: Option<u64>, url: String, background: bool },
+    /// The page opened a window with no click of yours, which wasn't opened.
+    Blocked { url: String },
+    /// The page closed its own window (`window.close()` in one a script opened).
+    Closed,
+    /// How one of its downloads goes.
+    Download(super::downloads::Report),
 }
 
 /// A web view's page hears what it does through this: the view's name and what it heard.
 pub type Told = async_channel::Sender<(SharedString, Heard)>;
 
+/// The most a popup tells before its page makes its tab: its last state and its downloads.
+const HELD_MOST: usize = 32;
+
 /// How one web view tells its page, from any thread (a snapshot is encoded off the main one).
 #[derive(Clone)]
 pub struct Tell {
     told: Told,
-    name: SharedString,
+    /// The view's name in its page: none for a popup whose tab the page hasn't made yet, whose tellings wait in `held`.
+    name: Arc<Mutex<Option<SharedString>>>,
+    held: Arc<Mutex<Vec<Heard>>>,
     /// The last address it told, which the other engine opens it at when the page switches engines.
     at: Arc<Mutex<Option<String>>>,
+    /// The page that holds it, and what its node hears (`Spec::popups`, `Spec::downloads`).
+    page: EntityId,
+    popups: Arc<AtomicBool>,
+    downloads: Arc<AtomicBool>,
 }
 
 impl Tell {
+    fn new(told: Told, page: EntityId, name: Option<SharedString>) -> Self {
+        Self { told, name: Arc::new(Mutex::new(name)), held: Arc::default(), at: Arc::default(), page, popups: Arc::default(), downloads: Arc::default() }
+    }
+
     pub fn tell(&self, heard: Heard) {
         if let Heard::State(state) = &heard
             && !state.url.is_empty()
         {
             *self.at.lock().unwrap() = Some(state.url.clone());
         }
-        let _ = self.told.try_send((self.name.clone(), heard));
+        let name = self.name.lock().unwrap().clone();
+        match name {
+            Some(name) => drop(self.told.try_send((name, heard))),
+            None => {
+                let mut held = self.held.lock().unwrap();
+                // Its newest state is all that matters of the ones before.
+                if matches!(heard, Heard::State(_)) {
+                    held.retain(|heard| !matches!(heard, Heard::State(_)));
+                }
+                if held.len() < HELD_MOST {
+                    held.push(heard);
+                }
+            }
+        }
+    }
+
+    /// Whether its page shows the windows it opens as tabs of their own (`onPopup`).
+    pub fn popups(&self) -> bool {
+        self.popups.load(Ordering::Relaxed)
+    }
+
+    /// Whether its page hears its downloads (`onDownload`): it downloads nothing otherwise.
+    pub fn downloads(&self) -> bool {
+        self.downloads.load(Ordering::Relaxed)
+    }
+
+    /// How a view the engine makes for a window this one opens tells the same page, once the page names it.
+    pub fn for_popup(&self) -> Tell {
+        Tell::new(self.told.clone(), self.page, None)
+    }
+
+    /// Names a popup's view as its page's node does, and tells the page what it said while it had no name.
+    fn named(&self, name: SharedString) {
+        *self.name.lock().unwrap() = Some(name.clone());
+        for heard in std::mem::take(&mut *self.held.lock().unwrap()) {
+            let _ = self.told.try_send((name.clone(), heard));
+        }
     }
 }
 
@@ -250,11 +318,11 @@ struct Entry {
     keep_data: bool,
     scripts: bool,
     url: Option<String>,
-    told: Told,
+    /// How its view tells its page, which keeps the last address it told.
+    tell: Tell,
     native: Option<Box<dyn Native>>,
-    /// The engine that made `native`, and the last address it told its page.
+    /// The engine that made `native`.
     engine: super::engine::Kind,
-    at: Arc<Mutex<Option<String>>>,
     /// What the page asked before the engine's view was made, done once it is, with each command's token.
     waiting: Vec<(WebGo, u64)>,
     /// The token of the last command done, so each runs once: a page's tokens only grow.
@@ -273,9 +341,48 @@ struct Entry {
     cuts: bool,
 }
 
+/// A view the engine made for a window a page opened, waiting for the page's node to take it (`Spec::popup`).
+struct Waiting {
+    id: u64,
+    page: EntityId,
+    profile: Profile,
+    keep_data: bool,
+    engine: super::engine::Kind,
+    native: Box<dyn Native>,
+    tell: Tell,
+}
+
+/// The most popups that wait for one page: a page that opens more than it shows as tabs loses the oldest.
+const WAITING_MOST: usize = 8;
+
 thread_local! {
     static VIEWS: RefCell<HashMap<(EntityId, SharedString), Entry>> = RefCell::default();
     static MAKERS: RefCell<HashMap<WindowId, Rc<dyn Maker>>> = RefCell::default();
+    static WAITING: RefCell<Vec<Waiting>> = RefCell::default();
+    static NEXT_POPUP: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+/// The engine made `native` for a window the view of `opener` opened at `url`, which tells its page through `tell`
+/// (`Tell::for_popup`): it waits for the page's node to take it as a tab of its own, and the page hears of it.
+pub fn popup(opener: &Tell, profile: &Profile, keep_data: bool, engine: super::engine::Kind, native: Box<dyn Native>, tell: Tell, url: &str, background: bool) {
+    let id = NEXT_POPUP.with(|next| next.replace(next.get() + 1));
+    let page = opener.page;
+    let dropped = WAITING.with_borrow_mut(|waiting| {
+        waiting.push(Waiting { id, page, profile: profile.clone(), keep_data, engine, native, tell });
+        let of_page = waiting.iter().filter(|one| one.page == page).count();
+        let oldest = waiting.iter().position(|one| one.page == page);
+        (of_page > WAITING_MOST).then(|| waiting.remove(oldest.unwrap_or(0)))
+    });
+    drop(dropped);
+    opener.tell(Heard::Popup { popup: Some(id), url: url.to_owned(), background });
+}
+
+/// The popup view `id` waiting for `page` of `profile`, taken.
+fn take_popup(id: u64, page: EntityId, profile: &Profile) -> Option<Waiting> {
+    WAITING.with_borrow_mut(|waiting| {
+        let at = waiting.iter().position(|one| one.id == id && one.page == page && one.profile == *profile)?;
+        Some(waiting.remove(at))
+    })
 }
 
 /// Has `maker` make the engine's views of the pages shown in the window `id`.
@@ -304,29 +411,41 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
             kept
         });
         for spec in specs {
-            let entry = views.entry((page, spec.name.clone())).or_insert_with(|| Entry {
-                profile: profile.clone(),
-                keep_data: spec.keep_data,
-                scripts,
-                url: spec.url.clone(),
-                told: told.clone(),
-                native: None,
-                engine: super::engine::Kind::WebKit,
-                at: Arc::default(),
-                waiting: Vec::new(),
-                // A command the page sent before the view was made runs once it is.
-                token: None,
-                shown: None,
-                last: None,
-                hidden: spec.hidden,
-                live: spec.live,
-                kept: None,
-                window: None,
-                over: Overlaid::default(),
-                cuts: false,
-            });
+            let key = (page, spec.name.clone());
+            if !views.contains_key(&key) {
+                let mut entry = Entry {
+                    profile: profile.clone(),
+                    keep_data: spec.keep_data,
+                    scripts,
+                    url: spec.url.clone(),
+                    tell: Tell::new(told.clone(), page, Some(spec.name.clone())),
+                    native: None,
+                    engine: super::engine::Kind::WebKit,
+                    waiting: Vec::new(),
+                    // A command the page sent before the view was made runs once it is.
+                    token: None,
+                    shown: None,
+                    last: None,
+                    hidden: spec.hidden,
+                    live: spec.live,
+                    kept: None,
+                    window: None,
+                    over: Overlaid::default(),
+                    cuts: false,
+                };
+                // The view its engine made for the window another view opened, with its opener, rather than a new one
+                // at its address: only one waiting for this page.
+                if let Some(popup) = spec.popup.and_then(|id| take_popup(id, page, profile)) {
+                    popup.tell.named(spec.name.clone());
+                    (entry.keep_data, entry.engine, entry.tell, entry.native) = (popup.keep_data, popup.engine, popup.tell, Some(popup.native));
+                }
+                views.insert(key.clone(), entry);
+            }
+            let entry = views.get_mut(&key).expect("just made");
             entry.hidden = spec.hidden;
             entry.live = spec.live;
+            entry.tell.popups.store(spec.popups, Ordering::Relaxed);
+            entry.tell.downloads.store(spec.downloads, Ordering::Relaxed);
             // In the order sent, each past the last one run.
             for command in &spec.commands {
                 if entry.token.is_some_and(|done| command.token <= done) {
@@ -342,6 +461,12 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
                     let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result: refused }));
                     continue;
                 }
+                // A downloaded file is Wings', whichever view or engine wrote it.
+                if let WebGo::Download { id, act } = &command.go {
+                    let result = super::downloads::act(profile, *id, *act);
+                    let _ = told.try_send((spec.name.clone(), Heard::Result { token: command.token, result }));
+                    continue;
+                }
                 match &mut entry.native {
                     Some(native) => native.go(&command.go, command.token),
                     None => entry.waiting.push((command.go.clone(), command.token)),
@@ -352,13 +477,14 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
     drop(ended);
 }
 
-/// The page `page` is gone: its web views end.
+/// The page `page` is gone: its web views end, and the popups that waited for it.
 pub fn forget_page(page: EntityId) {
     let ended: Vec<Entry> = VIEWS.with_borrow_mut(|views| {
         let gone: Vec<_> = views.keys().filter(|(of, _)| *of == page).cloned().collect();
         gone.into_iter().filter_map(|key| views.remove(&key)).collect()
     });
-    drop(ended);
+    let waited: Vec<Waiting> = WAITING.with_borrow_mut(|waiting| waiting.extract_if(.., |one| one.page == page).collect());
+    drop((ended, waited));
 }
 
 fn slot_name(page: EntityId, name: &str) -> SharedString {
@@ -441,9 +567,8 @@ pub fn place(window: &Window, _: &App) {
                 let mut fresh = false;
                 if entry.native.is_none() {
                     let Some(maker) = &maker else { continue };
-                    let tell = Tell { told: entry.told.clone(), name: name.clone(), at: entry.at.clone() };
                     entry.engine = maker.engine(&entry.profile);
-                    let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), tell);
+                    let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), entry.tell.clone());
                     for (go, token) in entry.waiting.drain(..) {
                         native.go(&go, token);
                     }
@@ -479,15 +604,14 @@ pub fn place(window: &Window, _: &App) {
                 entry.kept = None;
                 entry.over = Overlaid::default();
                 entry.cuts = false;
-                if let Some(at) = entry.at.lock().unwrap().clone() {
+                if let Some(at) = entry.tell.at.lock().unwrap().clone() {
                     entry.url = Some(at);
                 }
             }
             if entry.native.is_none() {
                 let (Some(maker), Some(_)) = (&maker, at) else { continue };
-                let tell = Tell { told: entry.told.clone(), name: name.clone(), at: entry.at.clone() };
                 entry.engine = maker.engine(&entry.profile);
-                let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), tell);
+                let mut native = maker.make(&entry.profile, entry.keep_data, entry.scripts, entry.url.as_deref(), entry.tell.clone());
                 for (go, token) in entry.waiting.drain(..) {
                     native.go(&go, token);
                 }
@@ -570,8 +694,23 @@ pub(crate) mod testing {
         }
     }
 
+    thread_local! {
+        /// The profile of the last view made, which a popup it opens has too.
+        static PROFILE: RefCell<Option<Profile>> = const { RefCell::new(None) };
+    }
+
+    /// A window the view of `opener` opened at `url`, as an engine makes one: a view of its own, with the opener's
+    /// profile, which waits for its page to take it, recording what is done to it in `did`. How it tells its page.
+    pub fn open_popup(opener: &Tell, did: &Rc<RefCell<Vec<Did>>>, url: &str) -> Tell {
+        let profile = PROFILE.with_borrow(Clone::clone).expect("a view was made");
+        let tell = opener.for_popup();
+        super::popup(opener, &profile, true, crate::web::engine::Kind::WebKit, Box::new(Fake(did.clone(), false)), tell.clone(), url, false);
+        tell
+    }
+
     impl Maker for Record {
         fn make(&self, profile: &Profile, keep_data: bool, _: bool, url: Option<&str>, told: Tell) -> Box<dyn Native> {
+            PROFILE.with_borrow_mut(|kept| *kept = Some(profile.clone()));
             self.did.borrow_mut().push(Did::Made { name: Some(profile.plugin.clone()), keep_data, url: url.map(str::to_owned) });
             self.tells.borrow_mut().push(told);
             Box::new(Fake(self.did.clone(), self.chromium.get()))
