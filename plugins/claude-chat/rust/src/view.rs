@@ -324,9 +324,10 @@ fn column() -> Node {
 /// as (item, child), oldest first, and the column's last child.
 fn conversation(c: &Chat) -> (Node, Vec<(usize, usize)>, usize) {
     if c.session.items.is_empty() && c.session.live.is_empty() {
-        let body = match &c.state {
-            State::Starting => loading(),
-            State::Failed(why) => crate::signin::failed_line(why, c),
+        let body = match (crate::trust::card(c), &c.state) {
+            (Some(card), _) => card,
+            (None, State::Starting) => loading(),
+            (None, State::Failed(why)) => crate::signin::failed_line(why, c),
             // A new chat's prompt sits in the middle of the conversation, over a soft glow. Needs Wings 0.2.58. Over the drift
             // of pixels or a gradient it goes without, so one backdrop moves behind it, not two.
             _ => {
@@ -393,6 +394,7 @@ fn newest_end(c: &Chat, nodes: &mut Vec<Node>) {
     nodes.extend(crate::elicitation_view::cards(c));
     // A hit usage limit, once the turn that hit it is over.
     nodes.extend(crate::limit_view::card(c));
+    nodes.extend(crate::trust::card(c));
     nodes.extend(crate::signin::status(c));
     if !c.session.live.is_empty() {
         let live = crate::edits_view::prose_in("live", &c.session.live, c);
@@ -1278,6 +1280,7 @@ fn composer(c: &Chat) -> Node {
             .maybe(crate::mods_view::above_prompt(c))
             .maybe(queued(c))
             .maybe(crate::branch::panel(c))
+            .maybe(crate::trust::declined_line(c))
             .child(message_box)
             .maybe(crate::mods_view::under_prompt(c)),
     )

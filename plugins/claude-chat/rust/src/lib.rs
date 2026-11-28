@@ -144,6 +144,8 @@ mod tasks_view;
 #[cfg(feature = "chat")]
 mod titles_view;
 mod titles;
+#[cfg(feature = "chat")]
+mod trust;
 mod usage;
 #[cfg(feature = "chat")]
 mod usage_view;

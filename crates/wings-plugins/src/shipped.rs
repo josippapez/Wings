@@ -389,6 +389,17 @@ fn claude_chat_may_read_the_terminals_a_message_mentions() {
     assert!(crate::permissions::may_read_pane_output(&own_plugin("claude-chat")));
 }
 
+/// The trust card reads Claude Code's trust, and Don't trust starts Claude Code, or the wrapper it ran as, without it.
+#[test]
+fn claude_chat_may_read_claude_codes_trust_and_start_it_without_the_folders() {
+    let p = own_plugin("claude-chat");
+    assert_calls_pass(&p, &[("claude", &["workspace-trust", "--json"])]);
+    let args: Vec<String> = ["-p", "--input-format=stream-json", "--resume=s1", "--ignore-persisted-trust"].map(String::from).to_vec();
+    for program in ["claude", "claude-rtk"] {
+        assert_eq!(crate::process::check(&p, program, &args, Path::new("/tmp")), Ok(()));
+    }
+}
+
 #[test]
 fn schedules_calls_pass_its_own_manifest() {
     let p = own_plugin("schedules");

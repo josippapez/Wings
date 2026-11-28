@@ -219,6 +219,8 @@ pub struct Chat {
     pub save_error: Option<String>,
     /// Which plan is open as a document, and the comment being written on it (`plan_doc_view.rs`).
     pub plan_view: crate::plan_doc::View,
+    /// Your answer for the folder's trust, and the card that asks it (`trust.rs`).
+    pub trust: crate::trust::Trust,
 }
 
 thread_local! {
@@ -296,6 +298,7 @@ thread_local! {
         review_note: None,
         save_error: None,
         plan_view: Default::default(),
+        trust: Default::default(),
     });
 }
 
@@ -467,16 +470,15 @@ fn launch(resume: Option<String>) {
 
 /// `launch`, as a copy of the session when `how` says so, and with the folders you added.
 pub fn launch_with(resume: Option<String>, how: Launch) {
-    let (run, cwd, program, start_mode, dirs, prompt, agent) = with(|c| {
+    let (run, cwd) = with(|c| {
         if how.fork {
             // A fork in a new tab has no conversation yet to name it by: the chat it came from named it.
             c.forked_from = Some(name(c).or_else(|| c.forked_from.clone()).unwrap_or_else(|| "an earlier session".into()));
         }
-        let run = begin(c);
-        (run, c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone(), c.first_prompt.take(), c.agent_type.clone())
+        (begin(c), c.cwd.clone())
     });
     load_files(run, cwd.clone());
-    load_git(run, cwd.clone());
+    load_git(run, cwd);
     task::spawn(async move {
         if let Some(id) = &resume {
             if let Ok(entries) = host::transcript_cut(id, &HISTORY_KINDS, HISTORY_ALL, HISTORY_CUT).await {
@@ -493,27 +495,38 @@ pub fn launch_with(resume: Option<String>, how: Launch) {
             with(|c| c.session.id = Some(id.clone()));
         }
         save_tab();
-        // Each value joined to its flag: Wings passes a program nothing else.
-        let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--include-hook-events", "--permission-prompt-tool=stdio", "--replay-user-messages", "--prompt-suggestions=true"]
-            .map(str::to_owned)
-            .to_vec();
-        args.extend(fork::flags(resume.as_deref(), &how, &dirs));
-        // A session that starts again keeps the agent it was started as.
-        args.extend(fork::agent_flag(agent.as_deref()));
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
-        // default one; a new chat gets the account you picked, else its project's, as a terminal there does.
-        let account = with(|c| account(c, resume.as_deref()));
-        load_accounts(run, resume.as_deref(), cwd.clone());
-        // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
-        let opening = Session::opening(start_mode.as_deref()) + &with(|c| fork::opening(&how, &c.session.prompts)) + &with(remote_on_start);
-        // A chat opened with a prompt sends it with its start, as your first message, since a page may write later only on a click or a key.
-        let opening = opening + &prompt.map(|text| with(|c| first_message(c, &text))).unwrap_or_default();
-        // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
-        let process = host::spawn_surviving(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
-        crate::reattach::started(run, process.input());
-        follow(run, process).await;
+        // In a folder Claude Code doesn't trust yet, the trust card asks first, and its click starts it.
+        if let Some(grant) = crate::trust::settle(run, resume.as_deref(), &how).await {
+            start_claude(run, resume, how, grant).await;
+        }
     });
+}
+
+/// Starts Claude Code `run` in the tab, going on with `resume` as `how` says, with the folder's trust as `grant` has it.
+pub(crate) async fn start_claude(run: u32, resume: Option<String>, how: Launch, grant: crate::trust::Grant) {
+    let (cwd, program, start_mode, dirs, prompt, agent) =
+        with(|c| (c.cwd.clone(), c.program.clone(), c.session.start_mode.clone(), c.dirs.clone(), c.first_prompt.take(), c.agent_type.clone()));
+    // Each value joined to its flag: Wings passes a program nothing else.
+    let mut args: Vec<String> = ["-p", "--input-format=stream-json", "--output-format=stream-json", "--verbose", "--include-partial-messages", "--include-hook-events", "--permission-prompt-tool=stdio", "--replay-user-messages", "--prompt-suggestions=true"]
+        .map(str::to_owned)
+        .to_vec();
+    args.extend(fork::flags(resume.as_deref(), &how, &dirs));
+    // A session that starts again keeps the agent it was started as.
+    args.extend(fork::agent_flag(agent.as_deref()));
+    args.extend(grant.flag());
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    // Under the account the session's transcript is in, which a plain `claude --resume` would not find if it isn't the
+    // default one; a new chat gets the account you picked, else its project's, as a terminal there does.
+    let account = with(|c| account(c, resume.as_deref()));
+    load_accounts(run, resume.as_deref(), cwd.clone());
+    // A fork before a message asks for its rewind as it starts, as the opening requests do: the fork is a new session.
+    let opening = Session::opening(start_mode.as_deref(), grant.trusted(&cwd)) + &with(|c| fork::opening(&how, &c.session.prompts)) + &with(remote_on_start);
+    // A chat opened with a prompt sends it with its start, as your first message, since a page may write later only on a click or a key.
+    let opening = opening + &prompt.map(|text| with(|c| first_message(c, &text))).unwrap_or_default();
+    // In Wings' terminal server, so the turn goes on while Wings restarts or updates, and this tab takes it over after.
+    let process = host::spawn_surviving(&account, &program, &args, &cwd, &opening, move |line| hear(run, line));
+    crate::reattach::started(run, process.input());
+    follow(run, process).await;
 }
 
 /// The line that sends `text` as the chat's first message, which is shown as yours at once.
@@ -548,6 +561,7 @@ pub(crate) fn begin(c: &mut Chat) -> u32 {
     c.fork_ask = false;
     c.model_dialog = false;
     c.message_to = None;
+    c.trust.card = Default::default();
     // A wait for a usage limit that the tab kept across a restart of Wings goes on.
     crate::limit_view::resume(c);
     c.run
@@ -920,6 +934,7 @@ pub(crate) fn report_agent() {
         });
         let (state, summary) = match asking {
             Some(tool) => ("blocked", Some(format!("Asks to use {tool}"))),
+            None if crate::trust::asks(c) => ("blocked", Some("Asks to trust this folder".to_owned())),
             None if c.session.working => ("working", Some(c.doing.0.clone()).filter(|doing| !doing.is_empty())),
             // Claude Code's own summary of how the turn ended (`post_turn_summary`) says whether it needs you.
             None => {

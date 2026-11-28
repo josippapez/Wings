@@ -110,6 +110,7 @@ pub(super) fn claude_chat(out: PathBuf) {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     };
     // `claude plugin ...` is what the plugins dialog's Discover view runs: the list prints a made-up one, an install says it went well.
+    // `claude workspace-trust --json` says the folder is trusted, unless the scene sets `$CHAT_UNTRUSTED`.
     // `claude edit-...` is what a change in the /hooks, /memory and /permissions dialogs runs: it reads the edit to the end
     // of its input, and refuses it with the text of `$CHAT_ANSWERS/<subcommand>` when the scene has one, as Claude Code does.
     // `$CHAT_DRIP`, when set, is printed again every 20 ms, as Claude Code streams a reply.
@@ -120,6 +121,7 @@ pub(super) fn claude_chat(out: PathBuf) {
     script(
         bin.join("claude"),
         r##"case "$1" in --version) if [ -f "$CHAT_FIXTURE.upgraded" ]; then echo '2.1.331 (Claude Code)'; else echo '2.1.329 (Claude Code)'; fi; exit 0;; upgrade) touch "$CHAT_FIXTURE.upgraded"; echo 'Successfully updated to 2.1.331'; exit 0;; esac
+if [ "$1" = workspace-trust ]; then if [ -n "$CHAT_UNTRUSTED" ]; then printf '{"trusted":false,"directory":"%s","root":"%s"}\n' "$PWD" "$PWD"; else printf '{"trusted":true,"directory":"%s"}\n' "$PWD"; fi; exit 0; fi
 if [ "$1" = plugin ]; then case "$2" in list) cat "$CHAT_AVAILABLE";; install) echo '{"command":"install","outcome":"ok","scope":"user"}';; esac; exit 0; fi
 case "$1" in edit-*) cat >/dev/null; if [ -f "$CHAT_ANSWERS/$1" ]; then cat "$CHAT_ANSWERS/$1" >&2; exit 1; fi; echo '{"ok":true}'; exit 0;; esac
 cat "$CHAT_FIXTURE"; if [ -n "$CHAT_DRIP" ]; then (n=0; while [ $n -lt 2000 ] && cat "$CHAT_DRIP" 2>/dev/null; do n=$((n+1)); sleep 0.02; done) & fi
@@ -1143,6 +1145,12 @@ esac"##,
         // close button and the two chips come first), and the filter leaves api-guard.
         ("discover", plugins, None, Some("type:/plugins;keys:enter;chip:Discover;keys:tab tab tab;type:guard"), "api-guard"),
         ("failed", vec![], Some(("1", "Error: Invalid API key · Please run /login")), None, "Invalid API key"),
+        // A folder Claude Code holds no trust for: the card asks before Claude Code starts there. Don't trust starts it
+        // without the folder's hooks, MCP servers and settings, which the line above the message box says, and Review trust
+        // there brings the card back over the chat.
+        ("trust", opened(vec![init.clone()]), None, None, "Trust this folder?"),
+        ("trust-declined", opened(vec![init.clone()]), None, Some("press:Don't trust;wait:1000"), "Review trust"),
+        ("trust-review", opened(vec![init.clone()]), None, Some("press:Don't trust;wait:1000;press:Review trust"), "again on this session"),
         // Search over the conversation: the bar under the header, its count, and the run of calls opened at the match. The
         // header's button is pressed by its label, and the typing goes to the field it focuses.
         ("search", work.clone(), None, Some("press:Search;type:pnpm test"), "1 of 1"),
@@ -1488,7 +1496,8 @@ esac"##,
             "handback-folded" => &reports_folded,
             "panel-folded" => &folded,
             "panel-rail" => &railed,
-            "panel-rail-default" => &rail_default,
+            // At 640 the trust card shows as a first run there does, beside the panel's rail.
+            "panel-rail-default" | "trust" | "trust-declined" | "trust-review" => &rail_default,
             "hash-issues" | "pull-request" | "pull-request-failing" | "pull-request-none" | "pull-request-merge" => &hash_host,
             "ask-edit-split" | "edits-split" => &split,
             _ => &host,
@@ -1656,6 +1665,7 @@ esac"##,
             std::env::set_var("CHAT_ISSUES", if name == "hash-issues" { issues_dir.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_PR", if name.starts_with("pull-request") { pull.as_os_str() } else { std::ffi::OsStr::new("") });
             std::env::set_var("CHAT_BRANCHES", if name == "branch-switch" { branches.as_os_str() } else { std::ffi::OsStr::new("") });
+            std::env::set_var("CHAT_UNTRUSTED", if name.starts_with("trust") { "1" } else { "" });
             std::env::set_var("CHAT_FIXTURE", &fixture);
             std::env::set_var("CHAT_ANSWERS", &answers);
             std::env::set_var("CHAT_EXIT", exit.map_or("", |(code, _)| code));
@@ -1739,7 +1749,8 @@ esac"##,
             if let Some(act) = act {
                 // Once Claude Code has answered, the model picker shows. Typing waits for more: the message box drops what is
                 // typed before the chat has started, and it is a new box once the conversation it resumes has been drawn
-                // (from the middle of the empty chat to the foot), so the page must have sent no new tree for a while.
+                // (from the middle of the empty chat to the foot), so the page must have sent no new tree for a while. In a
+                // folder Claude Code doesn't trust, it starts only once the trust card is answered.
                 let types = act.contains("type:");
                 let (mut trees, mut drawn) = (0, Instant::now());
                 let deadline = Instant::now() + Duration::from_secs(30);
@@ -1747,7 +1758,8 @@ esac"##,
                     let (sent, picker, disabled) = handle
                         .read_with(&cx, |view, cx| {
                             let disabled = view.input_field("Message").is_some_and(|field| field.read(cx).disabled);
-                            (view.trees_sent(), view.select_named("Model and effort").is_some(), disabled)
+                            let ready = view.select_named("Model and effort").is_some() || view.text().contains("Trust this folder?");
+                            (view.trees_sent(), ready, disabled)
                         })
                         .unwrap();
                     if sent != trees {

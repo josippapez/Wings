@@ -365,7 +365,14 @@ mod page {
         let Some(left) = host::processes().await.ok().and_then(|left| left.into_iter().rev().find(chat_runs)) else {
             return false;
         };
-        chat::with(|c| c.session.id = resume);
+        // One started without the folder's trust runs on without it, which the chat goes on saying.
+        let declined = left.args.iter().any(|arg| arg == crate::trust::DECLINED);
+        chat::with(|c| {
+            c.session.id = resume;
+            if declined {
+                c.trust.answer = Some(false);
+            }
+        });
         let process = host::adopt(&left.id, move |line| arrived(run, line));
         let waiting = Waiting { count: left.kept, lines: Vec::new(), dropped: false, entries, note: Note::read(&left.note) };
         FOLLOWED.with(|followed| *followed.borrow_mut() = Some(Followed { run, input: process.input(), track: Track::default(), waiting: Some(waiting) }));
@@ -507,6 +514,16 @@ mod page {
             // The header's account button needs the accounts, which a chat that took over still asks for.
             task::block_on(async {});
             assert_eq!(called(&calls, "claudeAccountChoices").len(), 1, "{:?}", calls.borrow().iter().map(|(name, _)| name.clone()).collect::<Vec<_>>());
+            assert_eq!(chat::with(|c| c.trust.answer), None);
+        }
+
+        /// After an update of the plugin, a chat whose Claude Code started without the folder's trust still says so.
+        #[test]
+        fn a_chat_that_takes_over_a_claude_code_started_without_trust_keeps_that_answer() {
+            let calls = wings(json!([{ "id": "left-0", "token": "process-1", "program": "claude", "args": ["-p", "--ignore-persisted-trust"], "cwd": "/p", "note": null, "kept": 0, "session": SESSION }]));
+            assert!(task::block_on(take_over(Some(SESSION.into()))));
+            assert_eq!(called(&calls, "adopt").len(), 1);
+            assert_eq!(chat::with(|c| c.trust.answer), Some(false));
         }
 
         #[test]

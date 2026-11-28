@@ -136,7 +136,7 @@ mod tests {
 
     /// The sign-ins asked for, and the starts of Claude Code (the fake one `refused` opens has no arguments).
     fn logins(calls: &Calls) -> Vec<Value> {
-        asked(calls, "exec").into_iter().filter(|params| params["program"] == "claude").collect()
+        asked(calls, "exec").into_iter().filter(|params| params["program"] == "claude" && params["args"][0] == "auth").collect()
     }
 
     fn starts(calls: &Calls) -> Vec<Value> {

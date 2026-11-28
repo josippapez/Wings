@@ -1572,11 +1572,16 @@ impl Session {
 
     /// What the chat asks Claude Code as it starts: the models and commands it has, how full the context is, your
     /// settings and how much of your plan's limits is used, to keep file checkpoints, and, with a `mode`, to start in it.
-    pub fn opening(mode: Option<&str>) -> String {
+    /// With `trusted`, the folder you trusted on the trust card, which Claude Code records as its own trust dialog does.
+    pub fn opening(mode: Option<&str>, trusted: Option<&str>) -> String {
         let mode = mode.map(|mode| request(START_MODE, json!({ "subtype": "set_permission_mode", "mode": mode })));
+        // Without `forwardSubagentText`, Claude Code prints a subagent's calls and results but not what it says or thinks.
+        let mut initialize = json!({ "subtype": "initialize", "forwardSubagentText": true });
+        if let Some(directory) = trusted {
+            initialize["workspaceTrust"] = json!({ "accepted": true, "directory": directory });
+        }
         [
-            // Without `forwardSubagentText`, Claude Code prints a subagent's calls and results but not what it says or thinks.
-            request(INITIALIZE, json!({ "subtype": "initialize", "forwardSubagentText": true })),
+            request(INITIALIZE, initialize),
             request(CONTEXT, json!({ "subtype": "get_context_usage" })),
             request(SETTINGS, json!({ "subtype": "get_settings" })),
             usage(),

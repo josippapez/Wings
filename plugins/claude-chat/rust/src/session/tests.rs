@@ -537,7 +537,7 @@ fn sent(line: &str) -> Value {
 
 #[test]
 fn the_opening_input_asks_for_a_start_mode_only_when_given_one() {
-    let lines = |mode| Session::opening(mode).lines().map(sent).collect::<Vec<_>>();
+    let lines = |mode| Session::opening(mode, None).lines().map(sent).collect::<Vec<_>>();
     assert!(lines(None).iter().all(|line| line["request"]["subtype"] != "set_permission_mode"));
     let asked = lines(Some("auto"));
     assert_eq!(asked.len(), 8);
@@ -1633,7 +1633,7 @@ fn a_transcript_read_again_leaves_out_what_a_rewind_dropped() {
 
 #[test]
 fn the_opening_input_has_claude_code_keep_the_checkpoints_a_code_rewind_restores() {
-    let lines = parsed(&Session::opening(None));
+    let lines = parsed(&Session::opening(None, None));
     assert!(lines.contains(&json!({ "type": "control_request", "request_id": "checkpoints",
         "request": { "subtype": "apply_flag_settings", "settings": { "env": { "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING": "1" } } } })));
 }
@@ -1729,7 +1729,7 @@ fn a_tool_result_shows_at_most_a_few_pictures() {
 
 #[test]
 fn the_opening_input_asks_for_the_text_of_thinking_and_leaves_the_budget_alone() {
-    let lines = parsed(&Session::opening(None));
+    let lines = parsed(&Session::opening(None, None));
     // Probed with Claude Code 2.1.327: with this alone the thinking blocks carry a summary, and the request is accepted.
     let asked = lines.iter().find(|line| line["request"]["subtype"] == "set_max_thinking_tokens").expect("a thinking request");
     assert_eq!(asked["request"], json!({ "subtype": "set_max_thinking_tokens", "thinking_display": "summarized" }));
@@ -2048,7 +2048,7 @@ fn a_task_is_ambient_from_its_entry_and_can_change_while_it_runs() {
 #[test]
 fn a_chat_asks_claude_code_to_forward_what_subagents_say() {
     // `apply_flag_settings` with the env variable has no effect once Claude Code runs (measured on 2.1.332): `initialize` takes it.
-    let first: Value = sent(Session::opening(None).lines().next().unwrap());
+    let first: Value = sent(Session::opening(None, None).lines().next().unwrap());
     assert_eq!(first["request"], json!({ "subtype": "initialize", "forwardSubagentText": true }));
 }
 
