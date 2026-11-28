@@ -196,7 +196,7 @@ fn title_row(issue: &Issue) -> Node {
                 begin("title", &for_key);
             }
         })
-        .child(Node::new("Text").prop("size", "large").prop("weight", "strong").text(issue.title.as_str()));
+        .child(Node::new("Text").prop("weight", "strong").text(issue.title.as_str()));
     row("none").child(type_icon(issue.kind, true, 18)).child(row("m").prop("align", "baseline").prop("grow", true).child(button).child(key_text))
 }
 
@@ -336,7 +336,7 @@ fn issue_chip(issue: Option<&Issue>, fallback: &str, on_remove: Option<Box<dyn F
         }
         None => line(fallback, Some("muted"), Some("small")).prop("mono", true),
     };
-    row("s").child(chip).maybe(on_remove.map(|remove| Node::new("Button").prop("size", "icon-xs").prop("variant", "ghost").prop("label", format!("Remove {fallback}")).prop("title", format!("Remove {fallback}")).on("onClick", move |_| remove()).text("×")))
+    row("s").child(chip).maybe(on_remove.map(|remove| small(icon_button(&format!("Remove {fallback}"), &icons::CLOSE, move || remove()))))
 }
 
 /// Opens another issue in this tab, with the trail back to this one.
@@ -570,7 +570,8 @@ fn description(issue: &Issue) -> Node {
         // In a row, as wide as its text: alone in the column it stretched across and centred its text, adrift.
         return row("none").child(Node::new("Button").prop("variant", "ghost").on("onClick", move |_| begin("description", &template)).text("Add a description…"));
     }
-    row("s").prop("align", "start").prop("justify", "between").child(markdown(&shown)).child(icon_button("Edit the description", &icons::PENCIL, move || begin("description", &template)))
+    // The edit button sits in a heading line over the text, so a table in it runs as wide as the card above, not 32 points short.
+    stack("s").child(row("s").prop("align", "center").prop("justify", "between").child(Node::new("Heading").prop("level", 3).text("Description")).child(icon_button("Edit the description", &icons::PENCIL, move || begin("description", &template)))).child(markdown(&shown))
 }
 
 /// An epic's or feature's children with how many are done.
@@ -749,12 +750,8 @@ fn start_agent(key: &str, kind: &str) {
     });
 }
 
-/// A button that opens `items` in a menu over the page, lined up with its right edge. A destructive item is drawn red.
-fn menu(label: &str, aria: Option<&str>, variant: &str, items: Vec<(String, bool, Rc<dyn Fn()>)>) -> Node {
-    let mut trigger = Node::new("Button").prop("size", "sm").prop("variant", variant).text(label);
-    if let Some(aria) = aria {
-        trigger = trigger.prop("label", aria).prop("title", aria);
-    }
+/// A menu of `items` opened by `trigger`, lined up with its right edge. A destructive item is drawn red.
+fn menu(trigger: Node, items: Vec<(String, bool, Rc<dyn Fn()>)>) -> Node {
     let items = items.into_iter().map(|(label, destructive, select)| {
         let item = Node::new("Button").key(label.clone()).on("onClick", move |_| select()).text(label);
         if destructive { item.prop("variant", "destructive") } else { item }
@@ -794,8 +791,8 @@ fn toolbar(issue: Option<&Issue>, key: &str) -> Node {
         "actions",
         row("s")
             .child(resume_button.text("Resume"))
-            .child(menu("Start agent", None, "default", agents))
-            .child(menu("…", Some("More"), "ghost", vec![("Delete issue".to_owned(), true, Rc::new(move || ask_to_delete(&delete_key)) as Rc<dyn Fn()>)])),
+            .child(menu(Node::new("Button").prop("size", "sm").prop("variant", "default").text("Start agent"), agents))
+            .child(menu(Node::new("Button").prop("size", "icon-sm").prop("variant", "ghost").prop("label", "More").prop("title", "More").child(ui::icon(24, 2.0, &icons::ELLIPSIS).prop("size", 16)), vec![("Delete issue".to_owned(), true, Rc::new(move || ask_to_delete(&delete_key)) as Rc<dyn Fn()>)])),
     ))
 }
 
@@ -837,14 +834,14 @@ fn view() -> Vec<Node> {
         .maybe(issue.kind.can_parent().then(|| children_section(issue, issues)))
         .maybe(files_section(issue))
         .child(activity(issue));
-    let head = stack("s").child(title_row(issue));
     let narrow = with(|p| p.narrow);
-    let text = stack("l").prop("grow", true).child(head).child(main);
+    let head = title_row(issue);
+    let (above, text) = if narrow { (Some(head), stack("l").prop("grow", true).child(main)) } else { (None, stack("l").prop("grow", true).child(head).child(main)) };
     // Beside the description the properties are a column of their own that stays in view: it is the split's fixed pane,
     // which scrolls on its own, while the text scrolls in the pane beside it. Under `SIDE_BY_SIDE` the split leaves the
     // pane out and the properties are above the text, in the same scroll, so the text keeps the whole width and a table
     // in it isn't cut off.
-    let read = if narrow { stack("l").child(properties(issue, issues, &project, true)).child(text) } else { text };
+    let read = if narrow { stack("l").maybe(above).child(properties(issue, issues, &project, true)).child(text) } else { text };
     let read = stack("l").prop("maxWidth", TEXT_WIDTH).prop("pt", 14).maybe(notices).child(read).maybe(confirming);
     let side = if narrow { Vec::new() } else { vec![properties(issue, issues, &project, false)] };
     let split = Node::new("Split")

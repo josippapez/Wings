@@ -149,7 +149,8 @@ pub fn session_marker(issue: &Issue) -> Option<Node> {
         Some(name) => name.to_owned(),
         None => agent_label(last.kind.as_deref()),
     };
-    Some(Node::new("Badge").prop("variant", "outline").text(label))
+    // In a row, so the badge is as wide as its name: alone in the card's column it stretched across and read as an input.
+    Some(row("xs").child(Node::new("Badge").prop("variant", "secondary").text(label)))
 }
 
 /// How many of an epic's or feature's children are done, as a short bar and "3/7".
@@ -178,4 +179,22 @@ pub fn status_summary(issues: &[Issue]) -> Node {
 /// The time an issue changed, "Updated 5 min ago".
 pub fn when(prefix: &str, ms: f64) -> String {
     format!("{prefix}{}", ago_now(ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{domain::SessionRef, testing::{fresh, make}};
+    use wings_plugin::ui::tree_json;
+
+    /// Alone in a card's column the badge stretched across it and read as an input: it sits in a row, as wide as its name.
+    #[test]
+    fn the_session_marker_is_a_badge_in_a_row_so_it_is_as_wide_as_its_name() {
+        let mut issue = make(&fresh(), "Checkout", |_| {}).issues.remove(0);
+        issue.sessions.push(SessionRef { id: "s1".into(), name: Some("checkout summary page".into()), kind: None, seen: 1.0 });
+        let marker = tree_json(session_marker(&issue).expect("a marker"));
+        assert_eq!(marker["type"], "Row", "{marker}");
+        assert_eq!(marker["children"][0]["type"], "Badge", "{marker}");
+        assert_eq!(marker["children"][0]["children"][0]["text"], "checkout summ…", "{marker}");
+    }
 }
