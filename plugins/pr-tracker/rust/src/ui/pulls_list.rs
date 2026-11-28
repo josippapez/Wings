@@ -202,7 +202,7 @@ fn pull_item(r: &PullRow, show_scope: bool) -> Node {
     let args = r.args.clone();
     // The page is being built under a shared borrow of the state, so this is a shared one too.
     let on_open = STATE.with(|s| s.borrow().on_open.clone());
-    let title_line = row().prop("gap", "s").children(tags.iter().enumerate().map(|(i, t)| tag(t, false).key(format!("t{i}")))).child(text(title).prop("weight", "medium").prop("truncate", true).prop("grow", true));
+    let title_line = row().prop("gap", "s").prop("align", "center").child(dot).children(tags.iter().enumerate().map(|(i, t)| tag(t, false).key(format!("t{i}")))).child(text(title).prop("weight", "medium").prop("truncate", true).prop("grow", true));
     let small = |t: String| muted(t).prop("size", "small");
     let identity = joined(
         [Some(small(r.number.clone())), r.author.clone().map(small), (!r.branch.is_empty()).then(|| small(r.branch.clone()).prop("mono", true).prop("truncate", true))].into_iter().flatten().collect(),
@@ -229,7 +229,8 @@ fn pull_item(r: &PullRow, show_scope: bool) -> Node {
     .enumerate()
     .map(|(i, badge)| badge.key(format!("f{i}")))
     .collect();
-    let content = [dot, stack().prop("gap", "xs").prop("grow", true).child(title_line).child(identity).child(facts)]
+    // The dot leads the title line, so it lines up with the title and not with the middle of the three lines.
+    let content = [stack().prop("gap", "xs").prop("grow", true).child(title_line).child(identity).child(facts)]
         .into_iter()
         .chain((!flags.is_empty()).then(|| row().prop("gap", "s").prop("wrap", true).prop("justify", "end").children(flags)));
     list_button(content, move || {

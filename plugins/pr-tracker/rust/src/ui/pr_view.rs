@@ -178,16 +178,19 @@ pub fn build(p: &Page) -> Vec<Node> {
     let mut actions = vec![
         icon_button("Refresh", &icons::REFRESH_CW, pr_page::refresh),
         icon_button(&format!("Open in {host_name}"), &icons::EXTERNAL_LINK, move || host::open_url(&url)),
-        busy_button("Send to agent", "secondary", p.busy == Some("agent"), || pr_page::run("agent", None)),
     ];
-    if p.can.approve && open {
-        actions.push(busy_button("Approve", "secondary", approving, || ui(|u| u.pending = Some(Pending { label: "Approve".into(), vote: None }))));
+    // Without the pull request loaded there is nothing to send, approve or diff: the page's one solid button is its fix.
+    if st.is_some() {
+        actions.push(busy_button("Send to agent", "ghost", p.busy == Some("agent"), || pr_page::run("agent", None)));
+        if p.can.approve && open {
+            actions.push(busy_button("Approve", "ghost", approving, || ui(|u| u.pending = Some(Pending { label: "Approve".into(), vote: None }))));
+        }
+        if p.can.vote && open {
+            let menu = Node::new("Button").prop("variant", "ghost").prop("size", "sm").prop("disabled", approving).on("onClick", |_| ui(|u| u.vote_menu = !u.vote_menu)).text("Vote ▾");
+            actions.push(menu);
+        }
+        actions.push(busy_button("Open diff", "default", p.busy == Some("diff"), || pr_page::run("diff", None)));
     }
-    if p.can.vote && open {
-        let menu = Node::new("Button").prop("variant", "secondary").prop("size", "sm").prop("disabled", approving).on("onClick", |_| ui(|u| u.vote_menu = !u.vote_menu)).text("Vote ▾");
-        actions.push(menu);
-    }
-    actions.push(busy_button("Open diff", "default", p.busy == Some("diff"), || pr_page::run("diff", None)));
     // The toolbar names the place: the repository strong and the number muted after it, once. The body names the thing.
     let place = line("m")
         .prop("align", "center")
@@ -201,7 +204,7 @@ pub fn build(p: &Page) -> Vec<Node> {
         }
         None => toolbar.child(Node::new("Slot").prop("name", "title").child(place)),
     };
-    toolbar = toolbar.child(Node::new("Slot").prop("name", "actions").child(line("xs").prop("align", "center").prop("wrap", true).children(actions)));
+    toolbar = toolbar.child(Node::new("Slot").prop("name", "actions").child(line("s").prop("align", "center").prop("wrap", true).children(actions)));
 
     let mut body: Vec<Node> = Vec::new();
     if let Some(pending) = pending {
@@ -803,5 +806,17 @@ mod tests {
     fn a_vote_is_worded_as_the_desktop_words_it() {
         assert_eq!(vote_word("changes"), "requested changes");
         assert_eq!(vote_word("nothing"), "has not voted");
+    }
+
+    /// A pull request that did not load has nothing to send, approve or diff: the page's one solid button is its fix.
+    #[test]
+    fn a_pull_request_that_did_not_load_offers_no_send_approve_or_diff() {
+        let mut p = pr_page::empty();
+        p.args = crate::args::args_of_url("https://github.com/acme/web/pull/482", "/tmp");
+        let json = wings_plugin::ui::tree_json(build(&p).remove(0)).to_string();
+        assert!(json.contains("Open in GitHub") && json.contains("Refresh"), "{json}");
+        for gone in ["Send to agent", "Approve", "Open diff"] {
+            assert!(!json.contains(gone), "{gone} needs the pull request: {json}");
+        }
     }
 }
