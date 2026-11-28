@@ -641,9 +641,19 @@ impl Render for PageView {
                                 .aria_label(error.clone())
                                 .flex_1()
                                 .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
                                 .text_size(px(12.0))
-                                .text_color(rgb(theme::palette().danger))
-                                .child(error),
+                                .when(self.stopped, |box_| {
+                                    box_.child(
+                                        div()
+                                            .text_size(px(13.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("This page stopped"),
+                                    )
+                                })
+                                .child(div().text_color(rgb(theme::palette().danger)).child(sentence_case(&error))),
                         )
                         .when_some(reload, |row, reload| {
                             row.child(
@@ -662,6 +672,19 @@ impl Render for PageView {
         // so the one being typed in draws its text in the window's field layer only when nothing of the page is over it.
         ui::in_piece(placed.then_some(ui::Piece::View(cx.entity_id())), covered, page)
     }
+}
+
+/// `text` with its first letter capital: a plugin's or the runtime's error is a lowercase clause.
+fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+#[test]
+fn an_error_reads_as_a_sentence() {
+    assert_eq!(sentence_case("the page ran for too long and was stopped"), "The page ran for too long and was stopped");
+    assert_eq!(sentence_case(""), "");
 }
 
 #[cfg(test)]
