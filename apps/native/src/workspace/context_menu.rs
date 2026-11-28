@@ -181,17 +181,15 @@ impl Workspace {
         if let MenuTarget::Pane(pane) | MenuTarget::PaneMore(pane, _) = &menu.target {
             children.push(self.move_to_tab(*pane, menu.moving, cx));
         }
-        // The most it may be tall: the room under the pointer or over it, where `popup_at` opens it.
-        let at = gpui::Bounds { origin: menu.at, size: gpui::Size::default() };
-        let placement = ui::behaviors::Placement { side_offset: px(0.0), ..Default::default() };
-        let room = ui::behaviors::position::room(at, window.viewport_size(), placement);
+        // The most it may be tall: the window less the padding `popup_at` keeps, so it shifts up to fit whole.
+        let room = window.viewport_size().height - px(16.0) - window.client_inset().unwrap_or_default() * 2.0;
         Some(ui::context_menu(
             menu.at,
             ui::menu("context-menu", "Menu")
-                // A menu taller than the window scrolls instead of running off its foot. A pane's is short, and its
+                // A menu taller than the window scrolls; a shorter one shifts up to fit. A pane's is short, and its
                 // "Move to tab" list opens outside its box, which scrolling would clip.
                 .when(!matches!(menu.target, MenuTarget::Pane(_) | MenuTarget::PaneMore(..)), |menu| {
-                    menu.max_h(room.0.max(room.1)).overflow_y_scroll()
+                    menu.max_h(room).overflow_y_scroll()
                 })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
                 .children(ui::spot(|| "context-menu".into()))

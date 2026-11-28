@@ -58,7 +58,7 @@ pub fn room(anchor: Bounds<Pixels>, window: Size<Pixels>, placement: Placement) 
 
 /// Where a popup of `size` goes for `anchor` in a window of `window` (window coordinates), and the side it went on:
 /// - its preferred side when it fits there, else the other side when it fits there, else the side with more room;
-/// - its top kept inside the padding, so one too tall for its side shows its start and runs off its foot;
+/// - its top kept inside the padding, shifted up to end inside it too, so only one taller than the window runs off its foot;
 /// - lined up with the anchor's start or end edge, then moved left or right to stay inside the padding, and to the
 ///   left padding when it's wider than the window.
 pub fn place(
@@ -85,6 +85,9 @@ pub fn place(
         Side::Bottom => anchor.bottom() + placement.side_offset,
         Side::Top => anchor.top() - placement.side_offset - size.height,
     }
+    // Too tall for its side: moved up (or down) to stay whole inside the padding, and only a popup taller than the
+    // window runs off its foot.
+    .min(window.height - placement.collision_padding - size.height)
     .max(placement.collision_padding);
     let x = match placement.align {
         Align::Start => anchor.left(),
@@ -173,10 +176,13 @@ mod tests {
         let (at, side) = place(anchor(100.0, 412.0, 80.0, 32.0), popup(200.0, 500.0), window(), Placement::default());
         assert_eq!(side, Side::Top);
         assert_eq!(at.y, px(8.0));
-        // 56pt over it, 488pt under it: stays under it.
+        // 56pt over it, 488pt under it: stays under it, shifted up so its foot is inside the padding.
         let (at, side) = place(anchor(100.0, 68.0, 80.0, 32.0), popup(200.0, 560.0), window(), Placement::default());
         assert_eq!(side, Side::Bottom);
-        assert_eq!(at.y, px(104.0));
+        assert_eq!(at.y, px(32.0));
+        // Taller than the window: its top at the padding.
+        let (at, _) = place(anchor(100.0, 68.0, 80.0, 32.0), popup(200.0, 700.0), window(), Placement::default());
+        assert_eq!(at.y, px(8.0));
     }
 
     #[test]

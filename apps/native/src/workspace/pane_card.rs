@@ -214,7 +214,7 @@ impl Workspace {
                 let (heading, detail, color) = match mount {
                     Some(wait) => (
                         format!(
-                            "Waiting for {} to mount",
+                            "Waiting for the drive “{}”",
                             wait.volume
                                 .file_name()
                                 .unwrap_or_default()
@@ -244,7 +244,7 @@ impl Workspace {
             None => div().into_any_element(),
         };
         let badges = self.badge_pills(pane, cx);
-        let opened_by = self.opened_by_pill(pane, cx);
+        let opened_by = self.opened_by_pill(pane, width, cx);
         #[cfg(unix)]
         let older_server = self.older_server_marker(pane, cx);
         #[cfg(not(unix))]
@@ -252,6 +252,15 @@ impl Workspace {
         let opened_terminals = self.agent_terminals_button(pane, zoomed, cx);
         let (shown, more) = header_plan(width, self.opened_by(pane).is_some());
         let opened_buttons = self.opened_buttons(pane, &shown, cx);
+        // What those take at the header's right edge: their buttons and the gap before them.
+        let opened_width = match [PaneAction::Hide, PaneAction::Move, PaneAction::Float]
+            .into_iter()
+            .filter(|action| opened_buttons.is_some() && shown.contains(action))
+            .count()
+        {
+            0 => 0.0,
+            n => n as f32 * (HEADER_BUTTON + HEADER_GAP) - HEADER_GAP + 8.0,
+        };
         let header = div()
             .id(SharedString::from(format!("pane-header-{pane}")))
             .relative()
@@ -325,7 +334,11 @@ impl Workspace {
                         // The folder gives way before the title does: shrinking by their widths alone, a long path
                         // left the title "…" in a narrow pane.
                         .flex_shrink(100.0)
-                        .truncate()
+                        // A path is cut from its start, so the folder's own name stays; a project's name from its end.
+                        .when(detail.contains('/'), |detail| {
+                            detail.overflow_hidden().whitespace_nowrap().text_ellipsis_start()
+                        })
+                        .when(!detail.contains('/'), |detail| detail.truncate())
                         .text_size(px(12.0))
                         .text_color(rgb(theme::muted_foreground()))
                         .children(ui::spot(|| format!("pane-detail:{pane}")))
@@ -346,6 +359,17 @@ impl Workspace {
                     .gap(px(2.0))
                     .opacity(if focused { 0.7 } else { 0.0 })
                     .group_hover(group.clone(), |style| style.opacity(1.0))
+                    // Unfocused, they are out of the header's row, so they take no room from the title: they show over
+                    // its end when the pointer is over the pane, left of the buttons an agent's terminal always shows.
+                    .when(!focused, |group| {
+                        group
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right(px(6.0 + opened_width))
+                            .pl(px(4.0))
+                            .bg(rgb(theme::surface()))
+                    })
                     .when(shown.contains(&PaneAction::SplitRight), |group| {
                         group.child(pane_button(
                             pane,

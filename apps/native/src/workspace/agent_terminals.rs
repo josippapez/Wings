@@ -174,6 +174,9 @@ impl AgentTerminals {
     }
 }
 
+/// The narrowest pane whose "Opened by" pill spells out the agent; narrower, it is the arrow alone.
+const PILL_TEXT_MIN: f32 = 420.0;
+
 impl Workspace {
     /// The agent pane that opened `pane` as a split beside it, while that agent's pane is open: the desktop's `openedBy`.
     pub(super) fn opened_by(&self, pane: usize) -> Option<usize> {
@@ -449,7 +452,7 @@ impl Workspace {
             .layout
             .agent_split(owner, &|pane| self.opened_by(pane).is_some());
         if let (Some(dir), Some((path, _))) = (dir, split) {
-            self.terminals[index].layout.set_dir(&path, dir);
+            self.terminals[index].layout.set_agent_dir(&path, dir);
             self.save(cx);
         }
         self.show(self.active, window, cx);
@@ -478,7 +481,7 @@ impl Workspace {
     }
 
     /// On a terminal an agent opened, the pill naming the agent, as the desktop's "Opened by".
-    pub(super) fn opened_by_pill(&self, pane: usize, cx: &gpui::App) -> Option<AnyElement> {
+    pub(super) fn opened_by_pill(&self, pane: usize, width: f32, cx: &gpui::App) -> Option<AnyElement> {
         let owner = self.opened_by(pane)?;
         let title = self.pane_title(owner, cx);
         Some(
@@ -489,6 +492,7 @@ impl Workspace {
                 .flex_shrink(10.0)
                 .max_w(px(160.0))
                 .h(px(20.0))
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .gap(px(4.0))
@@ -502,13 +506,17 @@ impl Workspace {
                     format!("This terminal was opened by {title}"),
                     None,
                 ))
-                .child("↑")
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(format!("Opened by {title}")),
-                )
+                .child(div().flex_none().child("↑"))
+                // A narrow pane keeps the arrow alone; the tooltip says the rest.
+                .when(width >= PILL_TEXT_MIN, |pill| {
+                    pill.child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(format!("Opened by {title}")),
+                    )
+                })
+                .when(width < PILL_TEXT_MIN, |pill| pill.px(px(6.0)).flex_none())
                 .into_any_element(),
         )
     }

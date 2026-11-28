@@ -208,7 +208,6 @@ impl Workspace {
                                     .font_weight(if unread { FontWeight::BOLD } else { FontWeight::MEDIUM })
                                     .when(unread, |name| name.children(crate::ui::spot(move || format!("agent-unread:{id}")))),
                              )
-                            .children(account.map(account_badge))
                             .child(agent_metadata(scale, format!("agent-age-{id}"), model, agent.state_since.or((agent.started_at > 0).then_some(agent.started_at)))),
                     )
                     .child(
@@ -220,9 +219,16 @@ impl Workspace {
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
                             .text_color(rgb(theme::muted_foreground()))
-                            .child(div().min_w_0().truncate().child(format!("{project},")))
+                            .child(div().min_w_0().truncate().child(project.to_string()))
                             .child(crate::ui::status_dot_slot(agent.state, slot))
-                            .child(div().min_w_0().truncate().child(status(agent))),
+                            .child(div().min_w_0().truncate().child(status(agent)))
+                            // The account stays on this line, so a long name keeps its own; a sidebar too narrow for it
+                            // beside the project and the state leaves it out (the row's label has it).
+                            .children(
+                                account
+                                    .filter(|_| self.side.width >= ACCOUNT_BADGE_MIN_SIDEBAR)
+                                    .map(|account| account_badge(account).max_w(px(96.0)).ml_auto()),
+                            ),
                     )
                     // The desktop's `text-muted-foreground/70`: what the agent just did, from Settings' model.
                     .children(agent.summary.clone().map(|summary| {
@@ -334,7 +340,7 @@ impl Workspace {
                             .text_size(scale.px(11.0))
                             .line_height(scale.px(16.0))
                             .text_color(rgb(theme::muted_foreground()))
-                            .child(div().min_w_0().truncate().child(format!("{project},")))
+                            .child(div().min_w_0().truncate().child(project.to_string()))
                             .child(crate::ui::status_dot_slot(state, format!("tab-agent-{tab}")))
                             .child(div().min_w_0().truncate().child(status)),
                     )
@@ -565,10 +571,13 @@ impl Phase {
             Phase::Sleeping => "sleeping".into(),
             Phase::Resuming => "resuming…".into(),
             Phase::Failed => "couldn't resume".into(),
-            Phase::Mounting(drive) => format!("waiting for {drive}"),
+            Phase::Mounting(drive) => format!("waiting for the drive “{drive}”"),
         }
     }
 }
+
+/// The narrowest sidebar whose agent rows show the account's badge.
+const ACCOUNT_BADGE_MIN_SIDEBAR: f32 = 230.0;
 
 /// The Claude Code account a session runs under, after its name: a small quiet pill that never takes more than half the
 /// line, so the name keeps the rest.
@@ -740,5 +749,10 @@ mod tests {
         assert_eq!(model_flag(&["--model".into(), "claude-opus-4-6".into()]), Some("opus".into()));
         assert_eq!(model_flag(&["--model=sonnet".into()]), Some("sonnet".into()));
         assert_eq!(model_flag(&["--model=gpt-x".into()]), Some("gpt-x".into()));
+    }
+
+    #[test]
+    fn a_pane_waiting_for_a_drive_names_it_as_one() {
+        assert_eq!(super::Phase::Mounting("encrypted".into()).label(), "waiting for the drive “encrypted”");
     }
 }

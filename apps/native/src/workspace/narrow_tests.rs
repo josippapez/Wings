@@ -131,3 +131,36 @@ fn a_project_menu_taller_than_the_window_stays_inside_it_and_scrolls() {
     let menu = ui::spot_at("context-menu").expect("the menu is drawn");
     assert!(menu.top() >= px(0.0) && menu.bottom() <= px(300.0), "the menu runs from {:?} to {:?}", menu.top(), menu.bottom());
 }
+
+#[test]
+fn a_project_menu_opened_low_in_the_window_shifts_up_to_show_all_its_items() {
+    let (_app, mut window) = open_sized(Some(size(px(1000.0), px(480.0))), |_| {});
+    let project = window.read(|w, _| w.projects[0].path.clone());
+    // Mid-height: under 240 points of room on both sides of the pointer, and the menu is taller than that.
+    window.update(|w, _, cx| w.open_menu(MenuTarget::Project(project), gpui::point(px(100.0), px(240.0)), cx));
+    window.draw();
+    let menu = ui::spot_at("context-menu").expect("the menu is drawn");
+    assert!(menu.bottom() <= px(480.0 - 8.0), "the menu's foot is at {:?}", menu.bottom());
+    assert!(menu.top() >= px(8.0));
+    // It wasn't capped to the room under the pointer, so nothing in it scrolls away.
+    assert!(menu.size.height > px(260.0), "the menu is {:?} tall", menu.size.height);
+}
+
+#[test]
+fn an_unfocused_panes_hidden_header_buttons_leave_their_room_to_its_folder() {
+    use crate::agents::PaneInfo;
+    let (_app, mut window) = open_sized(Some(size(px(1000.0), px(700.0))), |_| {});
+    let long = "/private/tmp/app-polish/tmp/wings-native-shot-projects/acme-web/packages/a/very/long/path";
+    window.update(|w, window, cx| {
+        w.split(Dir::Row, window, cx);
+        for pane in [0, 1] {
+            w.pane_info.insert(pane, PaneInfo { command: "zsh".into(), cwd: Some(long.into()), busy: false });
+        }
+    });
+    window.draw();
+    let focused = window.read(|w, _| w.focused_pane().unwrap());
+    let other = 1 - focused;
+    let detail = |pane: usize| ui::spot_at(&format!("pane-detail:{pane}")).expect("the folder shows").size.width;
+    // The focused header's four buttons are in its row (about 4 x 28 points); the other's take none.
+    assert!(detail(other) > detail(focused) + px(60.0), "{:?} beside {:?}", detail(other), detail(focused));
+}

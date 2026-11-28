@@ -99,6 +99,32 @@ impl Layout {
             })
     }
 
+    /// Turns the agent split at `path` to `to`, and the splits among the terminals on its second side across it, so
+    /// terminals beside the agent stack and terminals under it sit side by side: each keeps its room.
+    pub fn set_agent_dir(&mut self, path: &[bool], to: Dir) {
+        match (self, path.split_first()) {
+            (Layout::Split { dir, b, .. }, None) => {
+                *dir = to;
+                b.set_all_dirs(match to {
+                    Dir::Row => Dir::Column,
+                    Dir::Column => Dir::Row,
+                });
+            }
+            (Layout::Split { a, b, .. }, Some((second, rest))) => {
+                if *second { b } else { a }.set_agent_dir(rest, to)
+            }
+            _ => {}
+        }
+    }
+
+    fn set_all_dirs(&mut self, to: Dir) {
+        if let Layout::Split { dir, a, b, .. } = self {
+            *dir = to;
+            a.set_all_dirs(to);
+            b.set_all_dirs(to);
+        }
+    }
+
     pub fn set_dir(&mut self, path: &[bool], to: Dir) {
         match (self, path.split_first()) {
             (Layout::Split { dir, .. }, None) => *dir = to,

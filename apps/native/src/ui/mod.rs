@@ -740,5 +740,6 @@ pub fn select_menu(items: impl IntoIterator<Item = AnyElement>) -> Div {
 /// it is its own, as on a `behaviors::bind_layer` layer: nothing under it, like a dialog's backdrop, hears it.
 pub fn popover(content: impl Styled + InteractiveElement + IntoElement + 'static) -> AnyElement {
     let content = motion::popup("popover", motion::From::Above, motion::POPUP_IN, content.occlude());
-    deferred(anchored().child(cover(content))).into_any_element()
+    // Kept 8pt inside the window, as `behaviors::position` keeps a popup, instead of touching its edge.
+    deferred(anchored().snap_to_window_with_margin(px(8.0)).child(cover(content))).into_any_element()
 }

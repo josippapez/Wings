@@ -42,16 +42,23 @@ pub fn terminal_card(
                 .font_weight(FontWeight::MEDIUM)
                 .child(title.clone()),
         )
-        .child(
+        // A dot, not the word: in a narrow column the word left the title a few letters. Its tooltip and label say it.
+        .child({
+            let state = if running { "Running" } else { "Idle" };
             div()
+                .id(("page-terminal-state", pane))
                 .flex_none()
-                .text_color(rgb(if running {
+                .size(px(8.0))
+                .rounded_full()
+                .bg(rgb(if running {
                     theme::palette().working
                 } else {
                     theme::palette().muted_foreground
                 }))
-                .child(if running { "Running" } else { "Idle" }),
-        )
+                .role(Role::Image)
+                .aria_label(state)
+                .tooltip(ui::tooltip(state, None))
+        })
         .child(
             ui::icon_button(("page-terminal-pop", pane), Icon::Maximize, "Open in a tab", ButtonSize::Sm)
                 .on_click(move |_, window, cx| pop(window, cx)),

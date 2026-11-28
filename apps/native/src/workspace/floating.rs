@@ -209,12 +209,11 @@ impl Panel {
                     }])
                     .map(|panel| {
                         if collapsed {
-                            // As wide as its header, but never past the area's left edge, like the desktop's
-                            // `max-w-full`.
+                            // As wide as its header, but clear of the area's left edge as the open panel is.
                             panel
                                 .h(px(28.0))
                                 .when_some(area, |panel, area| {
-                                    panel.max_w(px(area.size.width.as_f32() - rect.right))
+                                    panel.max_w(px((area.size.width.as_f32() - rect.right - EDGE).max(0.0)))
                                 })
                                 .rounded_full()
                                 .bg(rgba(theme::popover()))

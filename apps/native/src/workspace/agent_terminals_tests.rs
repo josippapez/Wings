@@ -627,3 +627,24 @@ fn a_command_is_not_typed_into_a_program_started_since_the_terminal_was_seen_idl
     let next = open_from(&mut window, 0, "echo next");
     assert_eq!((next.pane_id.as_str(), next.reused), ("2", false));
 }
+
+/// Moved to the right, two terminals the agent opened stack: side by side in the strip beside the agent they had ~130
+/// points each. Below the agent they sit side by side again.
+#[test]
+fn moving_two_agent_terminals_to_the_right_stacks_them_and_below_puts_them_side_by_side() {
+    use Layout::Pane;
+    let (app, mut window) = open();
+    open_from(&mut window, 0, "echo first");
+    open_from(&mut window, 0, "echo second");
+    settle(&app, &mut window);
+    click_spot(&mut window, "agent-move:1");
+    assert_eq!(
+        layout(&window),
+        split(Dir::Row, 0.65, Pane(0), split(Dir::Column, 0.5, Pane(1), Pane(2)))
+    );
+    click_spot(&mut window, "agent-move:1");
+    assert_eq!(
+        layout(&window),
+        split(Dir::Column, 0.65, Pane(0), split(Dir::Row, 0.5, Pane(1), Pane(2)))
+    );
+}
