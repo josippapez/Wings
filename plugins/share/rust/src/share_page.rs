@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use wings_plugin::{
     host, messages,
     task::spawn,
-    ui::{Node, button, card, empty, loading, muted, notice, row, slot, stack, text},
+    ui::{Node, button, card, empty, loading, muted, notice, row, rows_card, slot, stack, text},
 };
 
 /// Allow waits this long after an ask shows, so a click meant for something else can't land on it.
@@ -92,11 +92,11 @@ fn install_card(busy: bool) -> Node {
 fn share_card(share: &Share, copied: bool, busy: bool) -> Node {
     let (url, open, name) = (share.url.clone(), share.url.clone(), share.name.clone());
     let copy_label = if copied { "Copied" } else { "Copy link" };
-    card().key(share.name.clone()).child(
-        stack()
-            .prop("gap", "s")
-            .child(text(share.url.as_str()).prop("weight", "strong").prop("size", "small"))
-            .child(muted(format!("localhost:{}", share.port)).prop("size", "small"))
+    stack()
+        .key(share.name.clone())
+        .prop("gap", "s")
+        .child(text(share.url.as_str()).prop("weight", "strong").prop("size", "small"))
+        .child(muted(format!("localhost:{}", share.port)).prop("size", "small"))
             .child(
                 row()
                     .prop("gap", "s")
@@ -107,12 +107,11 @@ fn share_card(share: &Share, copied: bool, busy: bool) -> Node {
                         with(|page| page.copied = Some(name));
                     }))
                     .child(small("Open", "secondary", false, move || drop(host::call("openUrl", json!({ "url": open })))))
-                    .child(small("Stop sharing", "ghost", busy, {
+                    .child(small("Stop sharing", "outline", busy, {
                         let name = share.name.clone();
                         move || ask("stop", json!({ "name": name }))
                     })),
-            ),
-    )
+            )
 }
 
 fn view() -> Vec<Node> {
@@ -133,7 +132,7 @@ fn view() -> Vec<Node> {
                 stack()
                     .prop("gap", "s")
                     .child(text("Shared now").prop("weight", "strong"))
-                    .children(p.shares.iter().map(|share| share_card(share, p.copied.as_deref() == Some(share.name.as_str()), p.busy)))
+                    .child(rows_card(p.shares.iter().map(|share| share_card(share, p.copied.as_deref() == Some(share.name.as_str()), p.busy))))
             }));
         vec![Node::new("Page").child(slot("body", body))]
     })
