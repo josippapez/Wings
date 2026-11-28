@@ -21,7 +21,7 @@ use wings_plugin::{
     format::plural,
     host, messages,
     task::{join_all, spawn},
-    ui::{Node, card, column_page, empty, icon_button, icons, joined, muted, page, row, section_label, stack, text},
+    ui::{Node, card, column_page, empty, error_state, icon_button, icons, joined, muted, page, row, section_label, stack, text},
 };
 
 /// The pull requests whose titles are asked for, one call each; the rest show by number, behind Show all.
@@ -264,7 +264,7 @@ fn build(p: &Page) -> Vec<Node> {
         return vec![page(Node::new("Toolbar").child(Node::new("Slot").prop("name", "title").text("Work item")), [empty("No work item", "Open a work item from a pane's badge or a project's Work items.")])];
     };
     if let Some(error) = &p.error {
-        let card = card_of(vec![strong("Couldn't load this work item"), text(error.as_str()).prop("tone", "danger"), row().child(button("Try again", "outline", reload))]);
+        let card = error_state("Couldn't load this work item", error, Some(("Try again", Box::new(reload))));
         return vec![column_page(toolbar(args.id, None, vec![]), [wrap(vec![card])])];
     }
     let Some(item) = &p.item else {
@@ -441,7 +441,7 @@ fn loading(label: &str) -> Node {
 }
 
 fn part_error(message: &str) -> Node {
-    card_of(vec![text(message).prop("tone", "danger"), row().child(button("Try again", "outline", reload))])
+    error_state("Couldn't load this", message, Some(("Try again", Box::new(reload))))
 }
 
 /// A page section: a small muted label over the card that holds its text.
@@ -607,7 +607,7 @@ fn revision_node(r: &Revision) -> Node {
                 None => muted("cleared"),
             })
     });
-    let head = gap(row(), "s").prop("wrap", true).child(strong(r.by.as_str())).maybe(r.created.then(|| muted("created this work item").prop("size", "small"))).maybe(time_text(&r.at).map(text));
+    let head = gap(row(), "s").prop("wrap", true).child(strong(r.by.as_str())).maybe(r.created.then(|| muted("created this work item").prop("size", "small"))).maybe(time_text(&r.at).map(|ago| muted(ago).prop("size", "small")));
     gap(row(), "s")
         .prop("align", "start")
         .key(r.id.to_string())
