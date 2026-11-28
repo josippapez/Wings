@@ -133,7 +133,8 @@ pub fn model_dialog(c: &Chat) -> Option<Node> {
             }
             _ => None,
         };
-        stack().prop("gap", "m").child(text("Model").prop("weight", "medium")).child(models).maybe(about).maybe(efforts)
+        let effort_label = efforts.is_some().then(|| text("Effort").prop("weight", "medium"));
+        stack().prop("gap", "m").child(text("Model").prop("weight", "medium")).child(models).maybe(about).maybe(effort_label).maybe(efforts)
     };
     Some(panel("Model and effort", WIDTH, close_model).child(body))
 }
