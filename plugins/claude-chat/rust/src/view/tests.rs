@@ -481,6 +481,47 @@ fn an_open_panel_in_a_narrow_tab_with_room_sets_the_conversation_in_beside_it() 
     });
 }
 
+/// Where the session panel floats over the conversation (a narrow tab), neither its pill nor the open panel is in the split's
+/// floating pane: they sit above the conversation in the flow, so they never cover a message, a card or the empty state's controls.
+#[test]
+fn the_pill_and_the_open_panel_that_would_cover_the_conversation_sit_above_it() {
+    chat::with(|c| {
+        c.state = State::Running;
+        c.side_in_wings = false;
+        c.side_open = true;
+        c.narrow = Some(true);
+        c.inset = false;
+        c.changes = Some((3, 2));
+        let split = |c: &Chat| -> serde_json::Value {
+            fn find(node: &serde_json::Value) -> Option<serde_json::Value> {
+                if node["type"] == "Split" && node["props"]["dock"].is_null() {
+                    return Some(node.clone());
+                }
+                node["children"].as_array()?.iter().find_map(find)
+            }
+            find(&wings_plugin::ui::tree_json(chat_page(c))).expect("the split")
+        };
+        // Slot 0 is the conversation, slot 1 the floating pane.
+        let start_of = |split: &serde_json::Value| split["children"][0].to_string();
+        let end_of = |split: &serde_json::Value| split["children"][1]["children"].as_array().map_or(0, Vec::len);
+        c.side_rail = Some(true);
+        let (start, end) = (start_of(&split(c)), end_of(&split(c)));
+        assert!(start.contains("Expand the side panel"), "the pill is above the conversation: {start}");
+        assert_eq!(end, 0, "nothing floats over the conversation");
+        c.side_rail = Some(false);
+        let (start, end) = (start_of(&split(c)), end_of(&split(c)));
+        assert!(start.contains("Collapse the side panel"), "the open panel is above the conversation: {start}");
+        assert_eq!(end, 0, "nothing floats over the conversation");
+        // With room beside the conversation, or in a wide tab, the panel floats beside the column as before.
+        c.inset = true;
+        assert!(end_of(&split(c)) > 0);
+        c.inset = false;
+        c.narrow = Some(false);
+        assert!(end_of(&split(c)) > 0);
+        assert!(!start_of(&split(c)).contains("Collapse the side panel"));
+    });
+}
+
 #[test]
 fn the_background_you_picked_goes_behind_the_whole_page_and_a_new_chat_drops_its_glow_over_it() {
     chat::with(|c| {

@@ -73,6 +73,8 @@ const INSET_BELOW: u32 = 480 + SIDE;
 const INSET_BELOW_RAIL: u32 = (INSET_COLUMN + 2 * SIDE + COLUMN + 2 * (64 + 28) + 8) / 2;
 /// The widest the collapsed pill gets: the panel's own width. Past it the project and branch are cut.
 const RAIL_MOST: u32 = SIDE;
+/// How tall the open panel is at most, above the conversation, before its sections scroll inside it.
+const INLINE_HEIGHT: u32 = 220;
 /// The most subagents the session panel lists.
 /// How tall a panel section's list is at most, in points: about eight of a pull request's 34-point rows. Past it the list scrolls inside.
 pub(crate) const LIST_HEIGHT: u32 = 280;
@@ -101,7 +103,12 @@ pub(crate) fn chat_page(c: &Chat) -> Node {
     // The rail goes down to the checklist and the message box, not past them: it is laid over the conversation alone.
     let marks = crate::rail::marks(c, &rail);
     let inset_below = if marks.is_empty() { INSET_BELOW } else { INSET_BELOW_RAIL };
-    let conversation = stack().prop("fill", true).prop("gap", "none").children(marks).child(body).maybe(latest(c));
+    // The collapsed panel's pill, where the panel floats over the tab: a row above the conversation, so it never sits on a message.
+    let pill = pill_in_flow(c);
+    let pilled = pill.is_some();
+    // Where the open panel has no room beside the conversation, it sits above it in the flow, as tall as `INLINE_HEIGHT` at most.
+    let inline = side_inline(c);
+    let conversation = stack().prop("fill", true).prop("gap", "none").maybe(pill).maybe((inline && !side(c).is_empty()).then(|| in_bar(side(c)).key("side-inline"))).children(marks).child(body).maybe(latest(c));
     // The session panel is a card on the right that the app leaves out of a narrow tab and that shows by default; only the
     // header's button puts it away and brings it back, also where it covers the conversation in a narrow tab. A panel left
     // out leaves its terminals out with it. In Wings' sidebar (`session_side.rs`) the conversation has the tab's width.
@@ -127,9 +134,8 @@ pub(crate) fn chat_page(c: &Chat) -> Node {
             true => (vec![conversation], Some(composer(c))),
             false => (vec![conversation, composer(c)], None),
         };
-        let split = split
-            .child(Node::new("Slot").prop("name", "start").children(start))
-            .child(Node::new("Slot").prop("name", "end").children(if side_shown(c) { side(c) } else { Vec::new() }));
+        let end = if side_shown(c) && !pilled && !inline { side(c) } else { Vec::new() };
+        let split = split.child(Node::new("Slot").prop("name", "start").children(start)).child(Node::new("Slot").prop("name", "end").children(end));
         // The terminals Claude opened dock beside all of it: the conversation, the panel and the message box. The place of what
         // is in the outer split's start slot never changes with the terminals, so the message box keeps its id: the split is
         // there with none open, and the one slot after the split is where a narrow tab sets the newest terminal.
@@ -203,6 +209,26 @@ fn side_shown(c: &Chat) -> bool {
 /// the tab is narrow enough for the panel to cover the conversation, and open where it sits beside it.
 pub(crate) fn side_railed(c: &Chat) -> bool {
     c.side_rail.unwrap_or(c.narrow == Some(true))
+}
+
+/// Whether the open panel sits above the conversation, in the flow: in a tab narrow enough for it to float over the conversation
+/// (where it covered the first messages, a question's text and an error) and without room to set the conversation in beside it.
+fn side_inline(c: &Chat) -> bool {
+    !c.side_in_wings && c.narrow == Some(true) && side_shown(c) && !side_railed(c) && !c.inset
+}
+
+/// `nodes` in a bar of the conversation's width, which has the padding a page without one lacks.
+fn in_bar(nodes: impl IntoIterator<Item = Node>) -> Node {
+    Node::new("Bar").prop("edge", "none").child(stack().prop("maxWidth", COLUMN).children(nodes))
+}
+
+/// The collapsed panel's pill, in the flow above the conversation, in a tab narrow enough for the panel to float over it: at
+/// the top right of the column it sat on the first message and cut its text.
+fn pill_in_flow(c: &Chat) -> Option<Node> {
+    if c.side_in_wings || !side_shown(c) || !side_railed(c) || c.narrow != Some(true) {
+        return None;
+    }
+    rail(c, side_sections(c, true).is_empty()).map(|pill| in_bar([row().prop("justify", "end").child(pill)]).key("side-pill"))
 }
 
 /// What is alive in the session panel: a terminal Claude opened, a background task and a subagent that run.
@@ -1407,7 +1433,12 @@ fn side(c: &Chat) -> Vec<Node> {
     let collapse = icon_button("Collapse the side panel", &icons::CHEVRON_RIGHT, || chat::set_side_rail(true)).tooltip("Collapse the side panel to a rail");
     let top = row().prop("align", "center").child(inset(muted("Session").prop("size", "small")).prop("grow", true)).child(collapse).key("side-collapse");
     // Taller than the room it has, the card keeps its edge and its sections scroll inside it.
-    let summary = card().prop("variant", "raised").prop("scroll", true).child(stack().prop("gap", "m").child(top).children(sections));
+    let body = stack().prop("gap", "m").child(top).children(sections);
+    let summary = if side_inline(c) {
+        card().prop("variant", "raised").child(wings_plugin::ui::scroll_within(INLINE_HEIGHT, [body]))
+    } else {
+        card().prop("variant", "raised").prop("scroll", true).child(body)
+    };
     vec![summary]
 }
 
