@@ -185,7 +185,9 @@ impl Mp4 {
         unsafe {
             self.input.markAsFinished();
             self.writer.endSessionAtSourceTime(at(end_ms));
-            self.writer.finishWritingWithCompletionHandler(&RcBlock::new(move || drop(done.send(()))));
+            self.writer.finishWritingWithCompletionHandler(&RcBlock::new(move || {
+                let _ = done.send(());
+            }));
         }
         wait.recv_timeout(Duration::from_secs(60)).map_err(|_| "The .mp4 wasn't finished in a minute".to_owned())?;
         // SAFETY: The writer's own state.

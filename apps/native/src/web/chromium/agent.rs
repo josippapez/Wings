@@ -854,8 +854,8 @@ fn screencast_frame(page: &Shared, session: Option<&str>, params: &Value) {
     if let (Some(channel), Some(id)) = (page.agent.channel(), params["sessionId"].as_i64()) {
         channel.ask(None, "Page.screencastFrameAck", json!({ "sessionId": id }), |_| {});
     }
-    let recording = page.agent.recording.borrow();
-    let Some(recording) = recording.as_ref() else { return };
+    let borrowed = page.agent.recording.borrow();
+    let Some(recording) = borrowed.as_ref() else { return };
     if !recording.ended() {
         let doc = page.agent.contexts.borrow().doc();
         if crate::web::holds_imported(&page.web_dir, &page.committed.borrow()) {
@@ -864,13 +864,13 @@ fn screencast_frame(page: &Shared, session: Option<&str>, params: &Value) {
             recording.end(RECORDING_SECRET);
         } else if let Some(jpeg) = params["data"].as_str().and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok()) {
             let at_ms = params["metadata"]["timestamp"].as_f64().map_or_else(|| recording.now_ms(), |seconds| seconds * 1000.0);
-            drop(recording);
+            drop(borrowed);
             page.agent.held.borrow_mut().hold(Instant::now(), at_ms, jpeg);
             check_held(page);
             return;
         }
     }
-    drop(recording);
+    drop(borrowed);
     page.agent.held.take();
     stop_screencast(page);
 }
