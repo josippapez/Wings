@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use wings_plugin::{
     format::tokens,
     messages,
-    ui::{Node, card, disclosure, dot, empty, gauge, list, loading, muted, row, select, stack, text},
+    ui::{Node, card, disclosure, dot, empty, gauge, list, loading, muted, notice, row, select, stack, text},
 };
 
 const LIMIT_LEVELS: (u32, u32) = (LIMIT_WARN as u32, LIMIT_CRITICAL as u32);
@@ -94,7 +94,7 @@ fn view() -> Vec<Node> {
         // Nothing says which account the session runs as, so every account's limits are named.
         let silent = s.is_some_and(|s| s["silent"] == true);
         if silent {
-            usage = usage.child(text("This session's Claude account isn't connected to Wings, so its limits aren't known. Connect Claude Code in Plugins.").prop("tone", "warn"));
+            usage = usage.child(notice("warn", "This session's Claude account isn't connected to Wings, so its limits aren't known. Connect Claude Code in Plugins."));
         }
         if let (true, Some(s)) = (missing, s) {
             usage = usage.child(muted(format!("This session runs as the {} account, which hasn't reported its limits yet.", account(&s["account"]))));
