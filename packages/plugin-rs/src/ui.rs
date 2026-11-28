@@ -77,6 +77,15 @@ impl Node {
         self.on("onTextScale", move |payload| on_step(payload["step"].as_str().unwrap_or_default()))
     }
 
+    /// On a `Page`: the keys the page takes for itself while its tab has the keyboard, written as `"cmd-t"` or
+    /// `"cmd-shift-g"` (Cmd or Ctrl, maybe Alt and Shift, and a letter, a digit or a punctuation key), even ones Wings binds
+    /// (Cmd-T, Cmd-W, Cmd-[). The app hands each to `on_key` with the string as written, before its own action for it, and a
+    /// key of a Chromium web page in the page too. It never gives up Cmd-Q, Cmd-H, Cmd-M, Cmd-K, Cmd-N, Cmd-comma, Cmd-1 to 9
+    /// or the editing keys. At most 32 (Wings 0.2.133).
+    pub fn shortcuts(self, keys: &[&str], on_key: impl Fn(&str) + 'static) -> Self {
+        self.prop("shortcuts", keys).on("onShortcut", move |payload| on_key(payload["key"].as_str().unwrap_or_default()))
+    }
+
     /// On a `Page`: what the app draws behind the whole page in place of its plain ground. `"pixels"` is a slow drift of
     /// dim, dithered pixels in the page's colours, and `"pixels:<pattern>"` another pattern of them: `rain`, `checker` or
     /// `embers` (a Wings after 0.2.60; a pattern it doesn't know is the drift). `"gradient:<preset>"` is a slow gradient mesh a shader draws, dimmed so
@@ -668,7 +677,8 @@ pub fn combobox(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick
 
 /// `combobox` for a free-text field that is also submitted as it stands, like an address bar. `on_key` hears the name of
 /// each key the field gets that no option took (`"Enter"`, `"Escape"`): no option is highlighted until an arrow key, so
-/// Enter reaches it unless the person moved to a suggestion, and then `on_pick` hears that one.
+/// Enter reaches it unless the person moved to a suggestion, and then `on_pick` hears that one. Its text is selected as it
+/// takes the keyboard, as an address bar's is, so what is typed replaces it.
 pub fn combobox_submit(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pick: impl Fn(&str) + 'static, on_key: impl Fn(&str) + 'static) -> Node {
     combobox_with(o, on_text, on_pick, Some(Rc::new(on_key)))
 }
@@ -697,7 +707,11 @@ fn combobox_with(o: Combobox, on_text: impl Fn(Option<String>) + 'static, on_pic
         field = field.prop("autoFocus", true);
     }
     if let Some(on_key) = on_key {
-        field = field.prop("submitOnEnter", true).prop("autoHighlight", false).on("onKeyDown", move |event| on_key(event["key"].as_str().unwrap_or_default()));
+        field = field
+            .prop("submitOnEnter", true)
+            .prop("autoHighlight", false)
+            .prop("selectOnFocus", true)
+            .on("onKeyDown", move |event| on_key(event["key"].as_str().unwrap_or_default()));
     }
     if !free_text {
         let left = on_text.clone();

@@ -97,9 +97,9 @@ pub enum Incoming {
     Event { method: String, params: Value, session: Option<String> },
 }
 
-/// The events a page follows (`Shared::devtools`): any other is left unread, as a busy page's console sends one for each
-/// line while `Runtime` is on.
-const FOLLOWED: [&str; 7] = [
+/// The events a page follows (`Shared::devtools`): any other is left unread. The `Network` events, which come for every
+/// request, are handed on unread to a thread of their own (`net::EVENTS`), and the page never hears of them.
+const FOLLOWED: [&str; 9] = [
     "Runtime.executionContextCreated",
     "Runtime.executionContextDestroyed",
     "Runtime.executionContextsCleared",
@@ -107,6 +107,8 @@ const FOLLOWED: [&str; 7] = [
     "Target.attachedToTarget",
     "Target.detachedFromTarget",
     "Page.screencastFrame",
+    "Runtime.consoleAPICalled",
+    "Runtime.exceptionThrown",
 ];
 
 /// The name of the event `message` is, read from its first bytes, before any of it is parsed: none for an answer, or for
@@ -146,8 +148,13 @@ wrap_dev_tools_message_observer! {
     impl DevToolsMessageObserver {
         /// Every message is read here, so CEF parses none of them again.
         fn on_dev_tools_message(&self, _browser: Option<&mut Browser>, message: Option<&[u8]>) -> ::std::os::raw::c_int {
-            if let (Some(page), Some(incoming)) = (self.page.upgrade(), message.and_then(parse)) {
-                page.devtools(incoming);
+            let Some(page) = self.page.upgrade() else { return 1 };
+            if let Some(message) = message {
+                if event_name(message).is_some_and(|name| super::net::EVENTS.iter().any(|event| event.as_bytes() == name)) {
+                    super::agent::feed_net(&page, message);
+                } else if let Some(incoming) = parse(message) {
+                    page.devtools(incoming);
+                }
             }
             1
         }
@@ -200,7 +207,14 @@ mod tests {
             parse(br#"{"method":"Runtime.bindingCalled","params":{"name":"wingsGuard"},"sessionId":"F1"}"#),
             Some(Incoming::Event { method: "Runtime.bindingCalled".into(), params: json!({ "name": "wingsGuard" }), session: Some("F1".into()) })
         );
-        assert_eq!(parse(br#"{"method":"Runtime.consoleAPICalled","params":{"args":[]}}"#), None);
+        assert_eq!(parse(br#"{"method":"Log.entryAdded","params":{"entry":{}}}"#), None);
+        // A console call and an exception are followed; a request's events are handed on whole and never parsed here.
+        assert!(matches!(parse(br#"{"method":"Runtime.consoleAPICalled","params":{"args":[]}}"#), Some(Incoming::Event { .. })));
+        assert!(matches!(parse(br#"{"method":"Runtime.exceptionThrown","params":{}}"#), Some(Incoming::Event { .. })));
+        assert_eq!(parse(br#"{"method":"Network.requestWillBeSent","params":{"requestId":"1"}}"#), None);
+        for event in super::super::net::EVENTS {
+            assert_eq!(event_name(format!(r#"{{"method":"{event}","params":{{}}}}"#).as_bytes()), Some(event.as_bytes()));
+        }
         // Written another way, it is still left unread once parsed.
         assert_eq!(parse(br#"{ "method": "Page.lifecycleEvent", "params": {} }"#), None);
         assert_eq!(parse(b"not json"), None);

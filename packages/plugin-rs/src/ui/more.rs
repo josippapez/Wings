@@ -281,6 +281,73 @@ pub fn web_record(record: &WebRecord, token: u64) -> Value {
     }
 }
 
+/// One event of `web_input`: what the DevTools protocol's `Input` domain takes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebInput {
+    /// A mouse event at `x`, `y` in CSS pixels of the page's viewport. `kind` is `mouseMoved`, `mousePressed` or
+    /// `mouseReleased`, `button` `none` or `left`, `buttons` the buttons held (1 for the left), `click_count` 1 to 3 on a
+    /// press and release, `modifiers` Alt 1, Ctrl 2, Meta 4, Shift 8.
+    Mouse { kind: &'static str, x: f64, y: f64, button: &'static str, buttons: u32, click_count: u32, modifiers: u32 },
+    /// A key event: `kind` is `keyDown`, `rawKeyDown` (no text), `keyUp` or `char`; `vk` the Windows virtual key code;
+    /// `commands` any of `selectAll`, `copy`, `cut`, `paste`, `undo`, `redo`, which a shortcut needs on macOS.
+    Key { kind: &'static str, key: String, code: String, vk: u32, text: Option<String>, modifiers: u32, commands: Vec<&'static str> },
+    /// Text typed in one go, as an input method makes it, into what has the focus.
+    Text(String),
+}
+
+/// The `command` prop that sends real mouse and keyboard input to the page, in order (Chromium engine only, needs
+/// `permissions.webScripts`): what the page hears is trusted (`isTrusted`), as the person's own. At most 256 events. It is
+/// refused as `web_eval` in the page's world is: on a page that shows a password or card field, and one signed in with
+/// imported cookies. `onResult` gets `{ token, value: { events } }`, or `{ token, error }`; WebKit answers that it needs
+/// Chromium.
+pub fn web_input(events: &[WebInput], token: u64) -> Value {
+    let events: Vec<Value> = events
+        .iter()
+        .map(|event| match event {
+            WebInput::Mouse { kind, x, y, button, buttons, click_count, modifiers } => {
+                json!({ "t": "mouse", "type": kind, "x": x, "y": y, "button": button, "buttons": buttons, "clickCount": click_count, "modifiers": modifiers })
+            }
+            WebInput::Key { kind, key, code, vk, text, modifiers, commands } => {
+                json!({ "t": "key", "type": kind, "key": key, "code": code, "vk": vk, "text": text, "modifiers": modifiers, "commands": commands })
+            }
+            WebInput::Text(text) => json!({ "t": "text", "text": text }),
+        })
+        .collect();
+    json!({ "action": "input", "events": events, "token": token })
+}
+
+/// What `web_network` asks for.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WebNetwork<'a> {
+    /// Only requests whose address holds this.
+    pub url: Option<&'a str>,
+    /// `2xx`, `3xx`, `4xx`, `5xx`, an exact status like `404`, or `failed`.
+    pub status: Option<&'a str>,
+    /// A resource type: `Document`, `XHR`, `Fetch`, `Script`, `Image`...
+    pub kind: Option<&'a str>,
+    /// Only requests that began after this, in milliseconds since 1970.
+    pub since: Option<f64>,
+    /// The most requests listed, 1 to 500 (100 when `None`).
+    pub limit: Option<u32>,
+    /// One request's id (from the list): its headers instead of a list.
+    pub detail: Option<&'a str>,
+    /// With `detail`: its response body too, a text one up to 1 MB.
+    pub body: bool,
+}
+
+/// The `command` prop that lists the page's recent requests, or one request in full (Chromium engine only, needs
+/// `permissions.webScripts`). Wings keeps the last 500 of a page from when it opens, with `Authorization`, `Cookie`,
+/// `Set-Cookie` and `Proxy-Authorization` values replaced by `(hidden)`. `onResult` gets `{ requests, matching, kept, now }`,
+/// or with `detail` the request with `requestHeaders` and `responseHeaders` and, with `body`, its `body`. A body is refused
+/// for a page that shows a password or card field, and nothing is given of a site signed in with imported cookies. WebKit
+/// answers that it needs Chromium.
+pub fn web_network(wanted: &WebNetwork, token: u64) -> Value {
+    json!({
+        "action": "network", "url": wanted.url, "status": wanted.status, "type": wanted.kind, "since": wanted.since,
+        "limit": wanted.limit, "detail": wanted.detail, "body": wanted.body, "token": token,
+    })
+}
+
 /// The `command` prop that clicks the button of the extension `id` (one of `WebState::extensions`) for the page (Wings
 /// 0.2.116): its popup opens under the button you pressed, or the extension hears the click. Send it only from a click
 /// handler: Wings runs it only right after your click or key in the page, which it uses up as `copyText` does, and
@@ -295,6 +362,37 @@ pub fn web_extension_action(id: &str, token: u64) -> Value {
 /// otherwise.
 pub fn web_download(action: &str, id: u64, token: u64) -> Value {
     json!({ "action": "download", "do": action, "id": id, "token": token })
+}
+
+/// The `command` prop that carries out the person's choice for the page's certificate notice (`WebState::certificate`,
+/// Wings 0.2.133, Chromium): `proceed` opens the site anyway for the rest of this run, otherwise the load is given up. Send
+/// it only from the notice's buttons: Wings runs it only right after the person's click, and answers `onResult` with
+/// `{ token, error }` otherwise.
+pub fn web_certificate(proceed: bool, token: u64) -> Value {
+    json!({ "action": "certificate", "proceed": proceed, "token": token })
+}
+
+/// The `command` prop that searches the page for `text` and marks the matches (Wings 0.2.133, Chromium); `again` goes on to
+/// the next match (the previous one for `forward: false`) of the same text. The count comes back in `WebState::find`.
+pub fn web_find(text: &str, forward: bool, again: bool, token: u64) -> Value {
+    json!({ "action": "find", "text": text, "forward": forward, "again": again, "token": token })
+}
+
+/// The `command` prop that ends the page's search and clears its marks (Wings 0.2.133, Chromium).
+pub fn web_stop_find(token: u64) -> Value {
+    json!({ "action": "stopFind", "token": token })
+}
+
+/// The `command` prop that zooms the page: `step` is `in`, `out` or `reset` (Wings 0.2.133, Chromium). The level comes back
+/// in `WebState::zoom`.
+pub fn web_zoom(step: &str, token: u64) -> Value {
+    json!({ "action": "zoom", "do": step, "token": token })
+}
+
+/// The `command` prop that opens the engine's inspector for the page in a window of its own (Wings 0.2.133, Chromium). Wings
+/// runs it only right after the person's click or key.
+pub fn web_inspect(token: u64) -> Value {
+    json!({ "action": "inspect", "token": token })
 }
 
 /// What a `web_view`'s `onDownload` hears of one download (Wings 0.2.132): a view whose node has no `onDownload`
@@ -385,6 +483,27 @@ pub struct WebState {
     pub imported: bool,
     /// The buttons of the extensions that are on and have one, by name (Wings 0.2.116).
     pub extensions: Vec<ExtensionButton>,
+    /// The engine that draws the page, `chromium` or `webkit`, empty from a Wings that doesn't say (Wings 0.2.133).
+    pub engine: String,
+    /// The site's certificate isn't valid and the person hasn't chosen: `(site, reason)`. Draw a notice with Go back and
+    /// Proceed (`web_certificate`) (Wings 0.2.133, Chromium).
+    pub certificate: Option<(String, String)>,
+    /// The site a server's name and password sheet waits on: Wings shows the sheet itself and the page never hears what is
+    /// typed. A page tells an agent that the person has to answer (Wings 0.2.133, Chromium).
+    pub auth: Option<String>,
+    /// What the page's search found while the find bar is open: matches (none when the engine can't count), the current one,
+    /// and whether anything was found (Wings 0.2.133, Chromium).
+    pub find: Option<WebFind>,
+    /// The page's zoom in percent: 100 from a Wings that doesn't say (Wings 0.2.133, Chromium).
+    pub zoom: u32,
+}
+
+/// What a find bar shows of the page's search.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WebFind {
+    pub matches: Option<u32>,
+    pub current: u32,
+    pub found: bool,
 }
 
 impl WebState {
@@ -399,6 +518,18 @@ impl WebState {
             error: event["error"].as_str().map(str::to_owned),
             dialog: Some(event["dialog"].clone()).filter(|dialog| dialog.is_object()),
             imported: event["imported"] == true,
+            engine: text("engine"),
+            certificate: event["certificate"].as_object().map(|found| {
+                let text = |key: &str| found.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
+                (text("site"), text("reason"))
+            }),
+            auth: event["auth"]["site"].as_str().map(str::to_owned),
+            find: event["find"].as_object().map(|found| WebFind {
+                matches: found.get("matches").and_then(Value::as_u64).map(|count| count as u32),
+                current: found.get("current").and_then(Value::as_u64).unwrap_or_default() as u32,
+                found: found.get("found").and_then(Value::as_bool).unwrap_or_default(),
+            }),
+            zoom: event["zoom"].as_u64().filter(|zoom| *zoom > 0).map_or(100, |zoom| zoom as u32),
             extensions: event["extensions"]
                 .as_array()
                 .map(|list| {
@@ -479,6 +610,28 @@ mod tests {
     }
 
     #[test]
+    fn input_and_network_are_commands_with_a_token_and_the_events_as_the_app_reads_them() {
+        let events = [
+            WebInput::Mouse { kind: "mousePressed", x: 1.5, y: 2.0, button: "left", buttons: 1, click_count: 1, modifiers: 0 },
+            WebInput::Key { kind: "rawKeyDown", key: "a".into(), code: "KeyA".into(), vk: 65, text: None, modifiers: 4, commands: vec!["selectAll"] },
+            WebInput::Text("hi".into()),
+        ];
+        assert_eq!(
+            web_input(&events, 3),
+            json!({ "action": "input", "token": 3, "events": [
+                { "t": "mouse", "type": "mousePressed", "x": 1.5, "y": 2.0, "button": "left", "buttons": 1, "clickCount": 1, "modifiers": 0 },
+                { "t": "key", "type": "rawKeyDown", "key": "a", "code": "KeyA", "vk": 65, "text": null, "modifiers": 4, "commands": ["selectAll"] },
+                { "t": "text", "text": "hi" },
+            ] })
+        );
+        assert_eq!(
+            web_network(&WebNetwork { url: Some("/api"), status: Some("4xx"), limit: Some(5), ..Default::default() }, 4),
+            json!({ "action": "network", "url": "/api", "status": "4xx", "type": null, "since": null, "limit": 5, "detail": null, "body": false, "token": 4 })
+        );
+        assert_eq!(web_network(&WebNetwork { detail: Some("1.2"), body: true, ..Default::default() }, 5)["body"], true);
+    }
+
+    #[test]
     fn an_upload_a_picture_diff_and_a_recording_are_commands_with_a_token() {
         assert_eq!(
             web_upload(Some("e12"), None, &[WebUploadFile::Path("/tmp/a.png"), WebUploadFile::Inline { name: "b.txt", data: "aGk=" }], 7),
@@ -508,7 +661,34 @@ mod tests {
         let (tree, handlers) = export(vec![web_view("main").on("onState", move |event| *seen.borrow_mut() = WebState::from_event(event))]);
         let event = json!({ "url": "https://a.b/", "title": "A", "loading": true, "canGoBack": true, "canGoForward": false, "error": null });
         assert!(handlers.call(tree[0]["props"]["onState"].as_str().unwrap(), &event));
-        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None, imported: false, extensions: vec![] });
+        assert_eq!(*heard.borrow(), WebState { url: "https://a.b/".into(), title: "A".into(), loading: true, can_go_back: true, can_go_forward: false, error: None, dialog: None, imported: false, extensions: vec![], engine: String::new(), certificate: None, auth: None, find: None, zoom: 100 });
+    }
+
+    #[test]
+    fn a_state_reads_the_certificate_the_password_sheet_the_find_and_the_zoom_and_the_commands_name_them() {
+        let event = json!({ "url": "https://a.b/", "engine": "chromium", "certificate": { "site": "a.b:8443", "reason": "self-signed" },
+            "auth": { "site": "a.b" }, "find": { "matches": 3, "current": 2, "found": true }, "zoom": 110 });
+        let state = WebState::from_event(&event);
+        assert_eq!(state.engine, "chromium");
+        assert_eq!(state.certificate, Some(("a.b:8443".into(), "self-signed".into())));
+        assert_eq!(state.auth.as_deref(), Some("a.b"));
+        assert_eq!(state.find, Some(WebFind { matches: Some(3), current: 2, found: true }));
+        assert_eq!(state.zoom, 110);
+        let bare = WebState::from_event(&json!({ "url": "https://a.b/", "zoom": 0, "find": { "found": false } }));
+        assert_eq!((bare.certificate, bare.auth, bare.zoom), (None, None, 100));
+        assert_eq!(bare.find, Some(WebFind { matches: None, current: 0, found: false }));
+        assert_eq!(web_certificate(true, 1), json!({ "action": "certificate", "proceed": true, "token": 1 }));
+        assert_eq!(web_find("cat", false, true, 2), json!({ "action": "find", "text": "cat", "forward": false, "again": true, "token": 2 }));
+        assert_eq!(web_stop_find(3), json!({ "action": "stopFind", "token": 3 }));
+        assert_eq!(web_zoom("in", 4), json!({ "action": "zoom", "do": "in", "token": 4 }));
+        assert_eq!(web_inspect(5), json!({ "action": "inspect", "token": 5 }));
+        // A page names the keys it takes, and hears each as it wrote it.
+        let heard = Rc::new(RefCell::new(String::new()));
+        let seen = heard.clone();
+        let (tree, handlers) = export(vec![Node::new("Page").shortcuts(&["cmd-t", "cmd-shift-g"], move |key| *seen.borrow_mut() = key.to_owned())]);
+        assert_eq!(tree[0]["props"]["shortcuts"], json!(["cmd-t", "cmd-shift-g"]));
+        assert!(handlers.call(tree[0]["props"]["onShortcut"].as_str().unwrap(), &json!({ "key": "cmd-shift-g" })));
+        assert_eq!(*heard.borrow(), "cmd-shift-g");
     }
 
     #[test]

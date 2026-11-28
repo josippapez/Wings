@@ -20,6 +20,7 @@ pub mod guard;
 #[cfg(all(feature = "ui", target_os = "macos"))]
 pub mod record;
 pub mod policy;
+pub mod prompts;
 pub mod snapshot;
 #[cfg(feature = "ui")]
 mod views;
@@ -30,7 +31,7 @@ pub mod mac;
 pub mod chromium;
 
 #[cfg(feature = "ui")]
-pub use views::{Extension, Heard, Spec, State, Tell, Told, forget_page, shown, slot, sync, update};
+pub use views::{Auth, Certificate, Extension, Found, Heard, Spec, State, Tell, Told, claim, claimed_by, forget_page, key_from, shown, slot, sync, take_key_from, update};
 #[cfg(all(test, feature = "test-support"))]
 pub(crate) use views::testing;
 
@@ -83,7 +84,7 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
     use crate::page::tree::{WebGo, WebRecord};
     match go {
         WebGo::Load(_) | WebGo::Back | WebGo::Forward | WebGo::Reload | WebGo::Stop => Ok(()),
-        WebGo::Eval { .. } | WebGo::Snapshot | WebGo::Logs | WebGo::Dialog { .. } => match (scripts, imported, settled) {
+        WebGo::Eval { .. } | WebGo::Snapshot | WebGo::Logs | WebGo::Dialog { .. } | WebGo::Network(_) => match (scripts, imported, settled) {
             (false, _, _) => Err(NO_SCRIPTS),
             (true, true, _) => Err(IMPORTED),
             (true, false, false) => Err(LOADING),
@@ -91,7 +92,7 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
         },
         // Files in the page, a picture compared, a recording: they read or act on the page as a script does. A recording
         // runs on through the pages it moves to, so asking after it, or ending it, needs nothing of the page it is on.
-        WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Record(WebRecord::Start { .. }) => match (scripts, imported, settled) {
+        WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Input(_) | WebGo::Record(WebRecord::Start { .. }) => match (scripts, imported, settled) {
             (false, _, _) => Err(NO_SCRIPTS),
             (true, true, _) => Err(IMPORTED),
             (true, false, false) => Err(LOADING),
@@ -103,6 +104,10 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
         WebGo::Extension(_) => Ok(()),
         // A file the page's views downloaded, never the page itself.
         WebGo::Download { .. } => Ok(()),
+        // The person's choices about the page, which read nothing of it for the plugin: a certificate, the find bar (whose
+        // result an engine keeps to "found" on a page signed in with imported cookies, `prompts::shown_find`), the zoom and
+        // the inspector.
+        WebGo::Certificate { .. } | WebGo::Find { .. } | WebGo::StopFind | WebGo::Zoom(_) | WebGo::Inspect => Ok(()),
     }
 }
 
@@ -112,13 +117,13 @@ pub fn gate(go: &crate::page::tree::WebGo, scripts: bool, imported: bool, settle
 /// only for you as well: a file a website wrote is never opened for it.
 pub fn needs_click(go: &crate::page::tree::WebGo) -> bool {
     use crate::page::tree::{WebDownload, WebGo};
-    matches!(go, WebGo::Extension(_) | WebGo::Download { act: WebDownload::Open | WebDownload::Reveal, .. })
+    matches!(go, WebGo::Extension(_) | WebGo::Certificate { .. } | WebGo::Inspect | WebGo::Download { act: WebDownload::Open | WebDownload::Reveal, .. })
 }
 
 /// Why an extension's button didn't open without a click.
-pub const NO_CLICK: &str = "A page can click an extension's button only right after you click or type in it";
+pub const NO_CLICK: &str = "A page can do that only right after you click or type in it: an extension's button, a certificate choice, the inspector";
 
-/// What WebKit says to a command only Chromium does (`upload`, `screenshotDiff`, `record`).
+/// What WebKit says to a command only Chromium does (`upload`, `screenshotDiff`, `record`, `input`, `network`).
 pub const NEEDS_CHROMIUM: &str = "This needs the Chromium engine: turn it on in Browser settings.";
 
 /// Why one didn't run while a page loads.
@@ -577,6 +582,7 @@ mod tests {
             WebGo::Snapshot,
             WebGo::Logs,
             WebGo::Dialog { accept: true, text: None },
+            WebGo::Network(Default::default()),
         ];
         for go in &moves {
             assert_eq!(gate(go, false, true, false), Ok(()), "{go:?} moves about");
@@ -601,6 +607,7 @@ mod tests {
             WebGo::Upload { reference: Some("e1".into()), selector: None, files: vec![] },
             WebGo::ScreenshotDiff { baseline: "/tmp/a.png".into(), threshold: 0.1, clip: None, current: None, diff: None },
             WebGo::Record(WebRecord::Start { path: "/tmp/a.mp4".into(), fps: 30, max_ms: 1000 }),
+            WebGo::Input(vec![crate::page::tree::WebInput::Text("a".into())]),
         ];
         for go in &acts {
             assert_eq!(gate(go, false, false, true), Err(NO_SCRIPTS), "{go:?}");
@@ -613,6 +620,25 @@ mod tests {
             let go = WebGo::Record(record);
             assert_eq!(gate(&go, false, false, true), Err(NO_SCRIPTS), "{go:?}");
             assert_eq!(gate(&go, true, true, false), Ok(()), "{go:?}");
+        }
+    }
+
+    /// The person's choices about a page read nothing of it for the plugin, so they go on any page, but a certificate
+    /// choice and the inspector only right after a click of theirs.
+    #[test]
+    fn a_certificate_choice_find_zoom_and_inspect_go_on_any_page_and_the_choice_and_the_inspector_need_a_click() {
+        use crate::page::tree::{WebGo, WebZoom};
+        let gos = [
+            (WebGo::Certificate { proceed: true }, true),
+            (WebGo::Certificate { proceed: false }, true),
+            (WebGo::Inspect, true),
+            (WebGo::Find { text: "a".into(), forward: true, again: false }, false),
+            (WebGo::StopFind, false),
+            (WebGo::Zoom(WebZoom::In), false),
+        ];
+        for (go, click) in gos {
+            assert_eq!(gate(&go, false, true, false), Ok(()), "{go:?}");
+            assert_eq!(needs_click(&go), click, "{go:?}");
         }
     }
 

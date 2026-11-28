@@ -226,6 +226,10 @@ pub struct Page {
     /// `onTextScale`: the page sizes its own text, so Cmd-+, Cmd-- and Cmd-0 send it `{ "step": "bigger" | "smaller" |
     /// "reset" }` while its tab has the keyboard, in place of changing the terminals' font.
     pub on_text_scale: Option<String>,
+    /// `shortcuts` and `onShortcut`: keys the page takes for itself while its tab has the keyboard, even ones Wings binds
+    /// (Cmd-T, Cmd-W, Cmd-[), routed to the page before Wings' own actions: it hears `{ "key": "<the key as it wrote it>" }`.
+    pub claims: Vec<Claim>,
+    pub on_shortcut: Option<String>,
     /// What Wings draws behind the whole page in place of its plain ground (`backdrop`), where the page fills a tab.
     pub backdrop: Option<Backdrop>,
     /// `column`: the width in points of the one centred column the body is set in and the toolbar's content lines up
@@ -441,6 +445,74 @@ pub enum WebGo {
     Record(WebRecord),
     /// Acts on a file the page's views downloaded (`onDownload`'s `id`), never on another path.
     Download { id: u64, act: WebDownload },
+    /// Real mouse and keyboard input, sent in order (Chromium only): what the page hears is trusted (`isTrusted`), as the
+    /// person's own. Checked as a script is, and refused on a page that shows a password or card field.
+    Input(Vec<WebInput>),
+    /// The page's requests, kept as they came (Chromium only): a list, filtered, or one request's headers and, on ask, its
+    /// response body.
+    Network(WebNetwork),
+    /// The person's choice about the page's certificate notice (`State::certificate`): open the site anyway, for this run,
+    /// or give up the load. Only right after the person's click (`web::needs_click`), so no script and no agent decides it.
+    Certificate { proceed: bool },
+    /// Looks for `text` in the page and marks the matches. `again` goes on to the next (or, with `forward: false`, the
+    /// previous) match of the same text, a fresh search otherwise. The result comes back in `State::find`.
+    Find { text: String, forward: bool, again: bool },
+    /// Ends the page's search and clears its marks.
+    StopFind,
+    /// Zooms the page one step, or back to 100%, for this view only. The level comes back in `State::zoom`.
+    Zoom(WebZoom),
+    /// Opens the engine's inspector for the page: Chromium's DevTools in a window of its own, and for WebKit Safari's
+    /// Develop menu, which `State::inspectable` says is on.
+    Inspect,
+}
+
+/// What a `zoom` command does, by its `do`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WebZoom {
+    In,
+    Out,
+    Reset,
+}
+
+impl WebZoom {
+    /// The step `web::prompts::zoom_after` takes.
+    pub fn step(self) -> i8 {
+        match self {
+            Self::In => 1,
+            Self::Out => -1,
+            Self::Reset => 0,
+        }
+    }
+}
+
+/// One event of an `input` command, as the DevTools protocol's `Input` domain takes it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebInput {
+    /// `Input.dispatchMouseEvent`, at `x`, `y` in CSS pixels of the page's viewport.
+    Mouse { kind: &'static str, x: f64, y: f64, button: &'static str, buttons: u32, click_count: u32, modifiers: u32 },
+    /// `Input.dispatchKeyEvent`.
+    Key { kind: &'static str, key: String, code: String, vk: u32, text: Option<String>, modifiers: u32, commands: Vec<&'static str> },
+    /// `Input.insertText`: typed text in one go, as an input method makes it.
+    Text(String),
+}
+
+/// What a `network` command asks.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct WebNetwork {
+    /// Only requests whose address holds this.
+    pub url: Option<String>,
+    /// `2xx`, `3xx`, `4xx`, `5xx`, an exact status like `404`, or `failed`.
+    pub status: Option<String>,
+    /// A resource type: `Document`, `XHR`, `Fetch`, `Script`, `Image`...
+    pub kind: Option<String>,
+    /// Only requests that began after this time, in milliseconds since 1970.
+    pub since: Option<f64>,
+    /// The most requests listed, the newest.
+    pub limit: usize,
+    /// One request by its id: its headers.
+    pub detail: Option<String>,
+    /// With `detail`: its response body too, as text.
+    pub body: bool,
 }
 
 /// What a `download` command does to a download, by its `do`.
@@ -486,8 +558,19 @@ const WEB_PATH_MAX: usize = 4096;
 const WEB_RECORD_MAX_MS: u64 = 3_600_000;
 const WEB_RECORD_MS: u64 = 900_000;
 
+/// The most events an `input` command carries, and the most characters one `Text` event types.
+const WEB_INPUT_EVENTS_MAX: usize = 256;
+const WEB_INPUT_TEXT_MAX: usize = 100_000;
+
+/// The most requests a `network` command lists, and when it doesn't say.
+const WEB_NETWORK_MAX: usize = 500;
+const WEB_NETWORK_LIMIT: usize = 100;
+
 /// The most bytes of a script an `eval` command runs: a page's helper, not a library.
 const WEB_SCRIPT_MAX: usize = 256 * 1024;
+
+/// The most characters of a find bar's text.
+const WEB_FIND_MAX: usize = 500;
 
 /// The most commands a `WebView` takes in one tree.
 const WEB_COMMANDS_MAX: usize = 32;
@@ -598,6 +681,77 @@ fn web_record(value: &Value) -> Option<WebGo> {
     Some(WebGo::Record(record))
 }
 
+/// The editing commands a key event may carry (`Input.dispatchKeyEvent`'s `commands`).
+const WEB_KEY_COMMANDS: [&str; 6] = ["selectAll", "copy", "cut", "paste", "undo", "redo"];
+
+fn web_input_event(event: &Value) -> Option<WebInput> {
+    let number = |key: &str| event.get(key).and_then(Value::as_f64).filter(|n| n.is_finite());
+    let small = |key: &str, most: u64| match event.get(key) {
+        None | Some(Value::Null) => Some(0),
+        Some(n) => n.as_u64().filter(|n| *n <= most).map(|n| n as u32),
+    };
+    let short = |key: &str| event.get(key).and_then(Value::as_str).filter(|text| text.len() <= 32 && !text.chars().any(char::is_control)).map(str::to_owned);
+    match event.get("t")?.as_str()? {
+        "mouse" => {
+            let kind = ["mouseMoved", "mousePressed", "mouseReleased"].into_iter().find(|kind| event.get("type").and_then(Value::as_str) == Some(*kind))?;
+            let (x, y) = (number("x").filter(|x| x.abs() <= 100_000.0)?, number("y").filter(|y| y.abs() <= 100_000.0)?);
+            let button = match event.get("button").and_then(Value::as_str) {
+                None | Some("none") => "none",
+                Some("left") => "left",
+                _ => return None,
+            };
+            Some(WebInput::Mouse { kind, x, y, button, buttons: small("buttons", 31)?, click_count: small("clickCount", 5)?, modifiers: small("modifiers", 15)? })
+        }
+        "key" => {
+            let kind = ["keyDown", "rawKeyDown", "keyUp", "char"].into_iter().find(|kind| event.get("type").and_then(Value::as_str) == Some(*kind))?;
+            let text = match event.get("text") {
+                None | Some(Value::Null) => None,
+                Some(text) => Some(text.as_str().filter(|text| text.chars().count() <= 8)?.to_owned()),
+            };
+            let commands = match event.get("commands") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(list) => list.as_array().filter(|list| list.len() <= 2)?.iter().map(|name| WEB_KEY_COMMANDS.into_iter().find(|known| name.as_str() == Some(*known))).collect::<Option<Vec<_>>>()?,
+            };
+            Some(WebInput::Key { kind, key: short("key")?, code: short("code").unwrap_or_default(), vk: small("vk", 255)?, text, modifiers: small("modifiers", 15)?, commands })
+        }
+        "text" => Some(WebInput::Text(event.get("text")?.as_str().filter(|text| !text.is_empty() && text.chars().count() <= WEB_INPUT_TEXT_MAX)?.to_owned())),
+        _ => None,
+    }
+}
+
+fn web_input(value: &Value) -> Option<WebGo> {
+    let events = value.get("events")?.as_array().filter(|events| !events.is_empty() && events.len() <= WEB_INPUT_EVENTS_MAX)?;
+    Some(WebGo::Input(events.iter().map(web_input_event).collect::<Option<Vec<_>>>()?))
+}
+
+fn web_network(value: &Value) -> Option<WebGo> {
+    let limit = match value.get("limit") {
+        None | Some(Value::Null) => WEB_NETWORK_LIMIT,
+        Some(limit) => usize::try_from(limit.as_u64()?).ok().filter(|limit| (1..=WEB_NETWORK_MAX).contains(limit))?,
+    };
+    let since = match value.get("since") {
+        None | Some(Value::Null) => None,
+        Some(since) => Some(since.as_f64().filter(|since| since.is_finite() && *since >= 0.0)?),
+    };
+    let body = match value.get("body") {
+        None | Some(Value::Null) => false,
+        Some(body) => body.as_bool()?,
+    };
+    let detail = web_optional_text(value, "detail", 128)?;
+    if body && detail.is_none() {
+        return None;
+    }
+    Some(WebGo::Network(WebNetwork {
+        url: web_optional_text(value, "url", 2048)?,
+        status: web_optional_text(value, "status", 8)?,
+        kind: web_optional_text(value, "type", 32)?,
+        since,
+        limit,
+        detail,
+        body,
+    }))
+}
+
 fn web_command(value: &Value) -> Option<WebCommand> {
     let token = value.get("token")?.as_u64()?;
     let go = match value.get("action")?.as_str()? {
@@ -623,6 +777,22 @@ fn web_command(value: &Value) -> Option<WebCommand> {
         "upload" => web_upload(value)?,
         "screenshotDiff" => web_screenshot_diff(value)?,
         "record" => web_record(value)?,
+        "input" => web_input(value)?,
+        "network" => web_network(value)?,
+        "certificate" => WebGo::Certificate { proceed: value.get("proceed")?.as_bool()? },
+        "find" => WebGo::Find {
+            text: value.get("text")?.as_str().filter(|text| !text.is_empty() && text.chars().count() <= WEB_FIND_MAX && !text.chars().any(char::is_control))?.to_owned(),
+            forward: value.get("forward").and_then(Value::as_bool).unwrap_or(true),
+            again: value.get("again").and_then(Value::as_bool).unwrap_or(false),
+        },
+        "stopFind" => WebGo::StopFind,
+        "zoom" => WebGo::Zoom(match value.get("do")?.as_str()? {
+            "in" => WebZoom::In,
+            "out" => WebZoom::Out,
+            "reset" => WebZoom::Reset,
+            _ => return None,
+        }),
+        "inspect" => WebGo::Inspect,
         "download" => WebGo::Download {
             id: value.get("id")?.as_u64()?,
             act: match value.get("do")?.as_str()? {
@@ -680,6 +850,28 @@ pub struct Shortcut {
     pub key: String,
 }
 
+/// A key a `Page` takes for itself (`shortcuts`), as the page wrote it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Claim {
+    pub name: String,
+    pub key: Shortcut,
+}
+
+/// The most keys one page may take.
+const CLAIMS_MAX: usize = 32;
+
+/// The keys of a page's `shortcuts` that may be taken, each as the page wrote it: a key Wings reserves for itself alone
+/// (quit, hide, minimize, the palette, settings, the tab numbers, full screen) or a text field needs (copy, paste, cut,
+/// select all, undo) stays out, so a page can't take the window or the editing keys away.
+fn claims(props: &Map<String, Value>) -> Vec<Claim> {
+    let Some(Value::Array(list)) = props.get("shortcuts") else { return Vec::new() };
+    list.iter()
+        .filter_map(Value::as_str)
+        .filter_map(|name| Some(Claim { name: name.to_owned(), key: Shortcut::parse_claim(name)? }))
+        .take(CLAIMS_MAX)
+        .collect()
+}
+
 /// The app's keys (`actions.rs`) and a text field's, as `Shortcut::canonical` writes them, with Cmd-N kept for a new
 /// window as on macOS. Elsewhere the app's keys are Ctrl-Shift, which `Shortcut::parse` refuses as a whole.
 const RESERVED: &[&str] = &[
@@ -690,8 +882,26 @@ const RESERVED: &[&str] = &[
     "ctrl-x", "ctrl-z",
 ];
 
+/// What a page's `shortcuts` may never take, as `Shortcut::canonical` writes them: the window's own keys and the editing
+/// keys a text field answers to. Every other key Wings binds is one a page may take (`Shortcut::parse_claim`).
+const UNCLAIMABLE: &[&str] = &[
+    "cmd-q", "cmd-n", "cmd-,", "ctrl-,", "cmd-c", "cmd-v", "cmd-x", "cmd-a", "cmd-z", "shift-cmd-z", "cmd-1", "cmd-2",
+    "cmd-3", "cmd-4", "cmd-5", "cmd-6", "cmd-7", "cmd-8", "cmd-9", "cmd-k", "ctrl-`", "cmd-h", "alt-cmd-h", "cmd-m",
+    "ctrl-cmd-f", "shift-cmd-w", "ctrl-a", "ctrl-c", "ctrl-v", "ctrl-x", "ctrl-z",
+];
+
 impl Shortcut {
     pub fn parse(text: &str) -> Option<Self> {
+        Self::parse_with(text, RESERVED)
+    }
+
+    /// A key a page may take with `shortcuts`: as `parse` reads it, but a key Wings binds is allowed unless it is one of
+    /// `UNCLAIMABLE`.
+    pub fn parse_claim(text: &str) -> Option<Self> {
+        Self::parse_with(text, UNCLAIMABLE)
+    }
+
+    fn parse_with(text: &str, refused: &[&str]) -> Option<Self> {
         let text = text.trim().to_ascii_lowercase();
         let (mods, key) = match text.strip_suffix("--") {
             Some(mods) => (mods, "-"),
@@ -712,7 +922,7 @@ impl Shortcut {
         let usable = (plain || function)
             && (shortcut.cmd || shortcut.ctrl)
             && !(shortcut.ctrl && shortcut.shift && !shortcut.cmd)
-            && !RESERVED.contains(&shortcut.canonical().as_str());
+            && !refused.contains(&shortcut.canonical().as_str());
         usable.then_some(shortcut)
     }
 
@@ -1811,6 +2021,8 @@ impl Walk {
                     flush: on("flush"),
                     body: slots.take("body"),
                     on_text_scale: handler("onTextScale"),
+                    claims: claims(&props),
+                    on_shortcut: handler("onShortcut"),
                     backdrop: str_prop(&props, "backdrop").and_then(Backdrop::named),
                     column: number(&props, "column").filter(|width| *width > 0.0).map(|width| width as f32),
                     toasts: slots.take("toasts"),

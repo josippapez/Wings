@@ -584,6 +584,29 @@ wrap_client! {
     }
 }
 
+// The inspector Wings opens for a page (`page::Shared`, Inspect): a window of its own that refuses what a page refuses and
+// opens nothing more. It has no `StrayRequests`, which close a window that goes to anything but an extension's page.
+wrap_client! {
+    struct InspectorClient {}
+
+    impl Client {
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(StrayLifeSpan::new())
+        }
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(super::page::Refuse::new())
+        }
+        fn download_handler(&self) -> Option<DownloadHandler> {
+            Some(super::page::NoDownloads::new())
+        }
+    }
+}
+
+/// The client of the inspector window of a page.
+pub(super) fn inspector() -> Client {
+    InspectorClient::new()
+}
+
 wrap_request_handler! {
     struct StrayRequests {}
 

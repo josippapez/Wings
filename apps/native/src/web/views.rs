@@ -56,6 +56,44 @@ pub struct State {
     pub imported: bool,
     /// The buttons of the extensions that are on and have one, for the page's toolbar.
     pub extensions: Vec<Extension>,
+    /// The engine that draws it: `chromium` or `webkit`, which differ in what Inspect does.
+    pub engine: &'static str,
+    /// The site's certificate isn't valid and the person hasn't chosen: the page's notice offers Go back and Proceed, and a
+    /// `certificate` command carries the choice out.
+    pub certificate: Option<Certificate>,
+    /// A server asks for a name and a password in Wings' own sheet. Only that it waits and for which site: what is typed
+    /// goes to the engine and nowhere else.
+    pub auth: Option<Auth>,
+    /// What the page's search found, while the find bar is open.
+    pub find: Option<Found>,
+    /// The page's zoom in percent, for this view only.
+    pub zoom: u32,
+}
+
+/// A certificate the engine refused, for the person to choose about.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Certificate {
+    /// `host:port` as the person reads it.
+    pub site: String,
+    pub reason: String,
+}
+
+/// The site a password sheet is open for.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Auth {
+    pub site: String,
+}
+
+/// What a find bar shows: how many matches and which is current (`matches` is none where the engine can't count), and
+/// whether the text was found at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Found {
+    pub matches: Option<u32>,
+    pub current: u32,
+    pub found: bool,
 }
 
 /// An extension's button for a page (`WKWebExtensionAction`): what its plugin draws in its toolbar, and the `id` its
@@ -169,6 +207,11 @@ impl Tell {
                 }
             }
         }
+    }
+
+    /// The page that holds the view, which the keys it takes for itself are looked up by (`claimed_by`).
+    pub fn page_id(&self) -> EntityId {
+        self.page
     }
 
     /// Whether its page shows the windows it opens as tabs of their own (`onPopup`).
@@ -477,8 +520,47 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
     drop(ended);
 }
 
+thread_local! {
+    /// The keys each page takes for itself (`Page::claims`), which a Chromium page's window sends to Wings when one is
+    /// pressed in it, where only the keys Wings binds go (`chromium::keys`).
+    static CLAIMS: RefCell<HashMap<EntityId, Vec<crate::page::tree::Shortcut>>> = RefCell::default();
+}
+
+thread_local! {
+    /// The page whose web page last handed Wings' window a key (`key_from`), until the window hears it.
+    static KEY_FROM: std::cell::Cell<Option<EntityId>> = const { std::cell::Cell::new(None) };
+}
+
+/// A key pressed in a web page of the page `page` goes to Wings' window: the page takes it when it claims it, wherever
+/// Wings' own keyboard was (`Workspace::page_claims`).
+pub fn key_from(page: EntityId) {
+    KEY_FROM.set(Some(page));
+}
+
+/// The page whose web page handed Wings' window the key it hears now, once.
+pub fn take_key_from() -> Option<EntityId> {
+    KEY_FROM.take()
+}
+
+/// Notes the keys the page `page` takes for itself now, none for a page that takes none.
+pub fn claim(page: EntityId, keys: Vec<crate::page::tree::Shortcut>) {
+    CLAIMS.with_borrow_mut(|claims| {
+        if keys.is_empty() {
+            claims.remove(&page);
+        } else {
+            claims.insert(page, keys);
+        }
+    });
+}
+
+/// The keys the page `page` takes for itself.
+pub fn claimed_by(page: EntityId) -> Vec<crate::page::tree::Shortcut> {
+    CLAIMS.with_borrow(|claims| claims.get(&page).cloned().unwrap_or_default())
+}
+
 /// The page `page` is gone: its web views end, and the popups that waited for it.
 pub fn forget_page(page: EntityId) {
+    claim(page, Vec::new());
     let ended: Vec<Entry> = VIEWS.with_borrow_mut(|views| {
         let gone: Vec<_> = views.keys().filter(|(of, _)| *of == page).cloned().collect();
         gone.into_iter().filter_map(|key| views.remove(&key)).collect()

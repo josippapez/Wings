@@ -18,7 +18,9 @@ mod devtools;
 pub mod extensions;
 mod focus;
 mod homes;
+mod input;
 pub mod keys;
+mod net;
 pub mod page;
 pub mod runtime;
 

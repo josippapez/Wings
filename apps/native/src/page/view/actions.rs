@@ -81,6 +81,8 @@ impl PageView {
     /// The page sent a new tree: its web views are the `WebView`s in it, and each hears what its node's `onState` is.
     pub(super) fn sync_web(&mut self, nodes: &[Node], cx: &mut Context<Self>) {
         let Some(profile) = self.web_profile.clone() else { return };
+        // A Chromium page's window sends these keys to Wings when they are pressed in it (`chromium::keys`).
+        crate::web::claim(cx.entity_id(), claiming_in(nodes).map(|page| page.claims.iter().map(|claim| claim.key.clone()).collect()).unwrap_or_default());
         fn webs<'a>(nodes: &'a [Node], into: &mut Vec<&'a tree::WebView>) {
             for node in nodes {
                 if let Node::WebView(web) = node {
@@ -245,6 +247,24 @@ impl PageView {
         }
     }
 
+    /// Gives the page the key it takes for itself (`Page::claims`), if `keystroke` is one: its `onShortcut` hears
+    /// `{ "key": "<as it wrote it>" }`, and the key goes no further. Says whether it was one. While a dialog shows, no key is
+    /// the page's but the dialog's.
+    pub fn claim_shortcut(&self, keystroke: &gpui::Keystroke) -> bool {
+        let Some(tree) = self.tree.as_ref().filter(|_| keystroke.modifiers.platform || keystroke.modifiers.control) else {
+            return false;
+        };
+        if dialog_in(&tree.children).is_some() {
+            return false;
+        }
+        let Some((page, claim)) = claiming_in(&tree.children).and_then(|page| Some((page, claim_of(page, keystroke)?))) else {
+            return false;
+        };
+        let Some(handler) = page.on_shortcut.as_deref() else { return false };
+        self.act(handler, Some(&serde_json::json!({ "key": claim.name })));
+        true
+    }
+
     /// Sends the page's `onTextScale` the `step` (`bigger`, `smaller` or `reset`), and says whether it has one.
     pub fn scale_text(&self, step: &str) -> bool {
         let Some(handler) = self.tree.as_ref().and_then(|tree| text_scale_in(&tree.children)) else {
@@ -280,8 +300,18 @@ impl PageView {
         let Some(focused) = focused else {
             return true;
         };
-        // What can hold the keyboard in the page: its fields, menus, chips, action rows, dialog and sheets. Compared by
-        // handle, as a window that hasn't drawn yet can't say what holds what.
+        self.holds(&focused, cx)
+    }
+
+    /// Whether the keyboard is in the page or on its tab: what holds it is one of the page's own parts.
+    pub fn has_keyboard(&self, window: &gpui::Window, cx: &gpui::App) -> bool {
+        window.focused(cx).is_some_and(|focused| self.holds(&focused, cx))
+    }
+
+    /// What can hold the keyboard in the page: its fields, menus, chips, action rows, dialog and sheets, or its tab.
+    /// Compared by handle, as a window that hasn't drawn yet can't say what holds what.
+    fn holds(&self, focused: &gpui::FocusHandle, cx: &gpui::App) -> bool {
+        let focused = focused.clone();
         self.host_focus.as_ref() == Some(&focused)
             || focused == self.dialog_focus
             || focused == self.popup_focus

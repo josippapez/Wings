@@ -13,7 +13,7 @@ use std::{
 use cef::*;
 use gpui::{Bounds, Pixels, Window};
 use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::{NSAlert, NSEvent, NSModalResponse, NSTextField, NSView, NSWindow};
+use objc2_app_kit::{NSAlert, NSEvent, NSModalResponse, NSSecureTextField, NSTextField, NSView, NSWindow};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use wings_chromium::window as frameless;
@@ -22,7 +22,7 @@ use super::{agent, devtools::Incoming, focus, keys, runtime};
 use crate::{
     page::tree::WebGo,
     web::{
-        Profile, downloads,
+        Profile, downloads, prompts,
         views::{self, Dialog, Heard, Maker, Native, Overlaid, State, Tell},
     },
 };
@@ -239,6 +239,18 @@ pub struct Shared {
     /// The page's `alert`, `confirm` or `prompt` waiting for an answer, what it shows, and Wings' sheet showing it.
     dialog: RefCell<Option<(JsdialogCallback, JsdialogType, Dialog)>>,
     sheet: RefCell<Option<(Retained<NSAlert>, Option<Retained<NSTextField>>)>>,
+    /// The site's certificate Chromium refused and waits on the person for (`on_certificate_error`), what the notice says,
+    /// and the address the main frame is going to, which tells a main page's certificate from a picture's.
+    certificate: RefCell<Option<(Callback, prompts::Notice)>>,
+    navigating: RefCell<String>,
+    /// A server's request for a name and a password, waiting on Wings' sheet: how to answer it, the site, and the sheet.
+    /// What is typed goes from the sheet to `AuthCallback` and nowhere else.
+    auth: RefCell<Option<(AuthCallback, String)>>,
+    auth_sheet: RefCell<Option<Retained<NSAlert>>>,
+    /// The page's zoom in percent, kept for this view and put back as each document loads.
+    zoom: Cell<u32>,
+    /// What its search last found: the text, and how many matches and which is current.
+    find: RefCell<Option<(String, Option<u32>, u32)>>,
     /// The page's dialogs now: its generation, how many it showed, and whether the person stopped them.
     dialogs: Cell<(u64, u32, bool)>,
     /// The key code of a press handed to Wings, whose key-up and characters the page doesn't get either.
@@ -325,6 +337,12 @@ impl Shared {
             pending: RefCell::default(),
             dialog: RefCell::new(None),
             sheet: RefCell::new(None),
+            certificate: RefCell::new(None),
+            navigating: RefCell::default(),
+            auth: RefCell::new(None),
+            auth_sheet: RefCell::new(None),
+            zoom: Cell::new(100),
+            find: RefCell::new(None),
             dialogs: Cell::new((0, 0, false)),
             forwarded: Cell::new(None),
             popup,
@@ -589,6 +607,8 @@ impl Shared {
             return;
         }
         self.answer(false, None);
+        self.resolve_certificate(prompts::Choice::Back);
+        self.resolve_auth(None);
         self.agent.page_closed();
         if let (Some(ns), Some(parent)) = (self.ns.borrow().clone(), self.parent.borrow().clone()) {
             frameless::detach(&ns, &parent);
@@ -652,9 +672,131 @@ impl Shared {
             WebGo::Upload { reference, selector, files } => agent::upload(self, reference.as_deref(), selector.as_deref(), files, token),
             WebGo::ScreenshotDiff { baseline, threshold, clip, current, diff } => agent::screenshot_diff(self, baseline, *threshold, *clip, current.as_deref(), diff.as_deref(), token),
             WebGo::Record(record) => agent::record(self, record, token),
+            WebGo::Input(events) => agent::input(self, events, token),
+            WebGo::Network(wanted) => agent::network(self, wanted, token),
             // Done by `views::update`, whichever engine wrote the file.
             WebGo::Download { .. } => {}
+            WebGo::Certificate { proceed } => {
+                let waiting = self.certificate.borrow().as_ref().map(|(_, notice)| notice.clone());
+                let choice = if *proceed { prompts::Choice::Proceed } else { prompts::Choice::Back };
+                let result = match prompts::decide(&self.web_dir, waiting.as_ref(), choice) {
+                    Some(choice) => {
+                        self.resolve_certificate(choice);
+                        Ok(serde_json::Value::Null)
+                    }
+                    None => Err("The page waits on no certificate choice".into()),
+                };
+                self.told.tell(Heard::Result { token, result });
+            }
+            WebGo::Find { text, forward, again } => {
+                if let Some(host) = browser.host() {
+                    self.find.replace(Some((text.clone(), None, 0)));
+                    host.find(Some(&CefString::from(text.as_str())), i32::from(*forward), 0, i32::from(*again));
+                    self.tell();
+                }
+            }
+            WebGo::StopFind => {
+                if let Some(host) = browser.host() {
+                    host.stop_finding(1);
+                }
+                self.find.replace(None);
+                self.tell();
+            }
+            WebGo::Zoom(zoom) => {
+                self.zoom.set(prompts::zoom_after(self.zoom.get(), zoom.step()));
+                self.apply_zoom();
+                self.tell();
+            }
+            WebGo::Inspect => {
+                if let Some(host) = browser.host() {
+                    // In a window of its own, with a client of its own that `StrayClient`'s rules don't close.
+                    host.show_dev_tools(None, Some(&mut runtime::inspector()), None, None);
+                }
+            }
         }
+    }
+
+    /// Puts the view's zoom on the page: Chromium keeps its own per site, so it is set again as each document loads.
+    fn apply_zoom(&self) {
+        if let Some(host) = self.browser.borrow().as_ref().and_then(Browser::host) {
+            host.set_zoom_level(prompts::chromium_level(self.zoom.get()));
+        }
+    }
+
+    /// Carries out the person's choice for the certificate notice that waits: Chromium goes on with the site or gives up.
+    fn resolve_certificate(&self, choice: prompts::Choice) {
+        let Some((callback, _)) = self.certificate.take() else { return };
+        match choice {
+            prompts::Choice::Proceed => callback.cont(),
+            prompts::Choice::Back => callback.cancel(),
+        }
+        self.tell();
+    }
+
+    /// The server asks for a name and a password: Wings' sheet asks the person, naming the site and the realm, and gives
+    /// the answer to Chromium only. A page not on screen, or one asking again, is cancelled.
+    fn wait_for_auth(&self, callback: AuthCallback, site: String, realm: &str, proxy: bool) {
+        self.resolve_auth(None);
+        let (Some(mtm), Some(window)) = (MainThreadMarker::new(), self.parent.borrow().clone()) else { return callback.cancel() };
+        if self.want.get().is_none() {
+            return callback.cancel();
+        }
+        let (title, message) = prompts::auth_words(&site, realm, proxy, false);
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(&title));
+        alert.setInformativeText(&NSString::from_str(&message));
+        alert.addButtonWithTitle(&NSString::from_str("Sign In"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        let (name, password) = {
+            let frame = |y: f64| NSRect::new(NSPoint::new(0.0, y), NSSize::new(260.0, 24.0));
+            let name = NSTextField::textFieldWithString(&NSString::new(), mtm);
+            name.setFrame(frame(30.0));
+            name.setPlaceholderString(Some(&NSString::from_str("Name")));
+            let password = NSSecureTextField::initWithFrame(<NSSecureTextField as objc2::MainThreadOnly>::alloc(mtm), frame(0.0));
+            password.setPlaceholderString(Some(&NSString::from_str("Password")));
+            (name, password)
+        };
+        let fields = NSView::initWithFrame(<NSView as objc2::MainThreadOnly>::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(260.0, 54.0)));
+        fields.addSubview(&name);
+        fields.addSubview(&password);
+        alert.setAccessoryView(Some(&fields));
+        alert.window().setInitialFirstResponder(Some(&name));
+        // The page's window is over the sheet's place: it hides while the sheet shows.
+        if let (Some(ns), Some(parent)) = (self.ns.borrow().clone(), self.parent.borrow().clone())
+            && self.attached.replace(false)
+        {
+            frameless::detach(&ns, &parent);
+        }
+        self.auth.replace(Some((callback, site)));
+        let page = weak_of(self);
+        let answered = block2::RcBlock::new(move |response: NSModalResponse| {
+            let Some(page) = page.upgrade() else { return };
+            page.auth_sheet.replace(None);
+            // NSAlertFirstButtonReturn, Sign In, is 1000.
+            let given = (response == 1000).then(|| prompts::credentials(&name.stringValue().to_string(), &password.stringValue().to_string())).flatten();
+            password.setStringValue(&NSString::new());
+            page.resolve_auth(given);
+            page.apply_place();
+            page.tell();
+        });
+        self.auth_sheet.replace(Some(alert.clone()));
+        alert.beginSheetModalForWindow_completionHandler(&window, Some(&answered));
+        self.tell();
+    }
+
+    /// Gives Chromium the name and password the person typed, or cancels the request for none.
+    fn resolve_auth(&self, given: Option<(String, String)>) {
+        let Some((callback, _)) = self.auth.take() else { return };
+        match given {
+            Some((name, password)) => callback.cont(Some(&CefString::from(name.as_str())), Some(&CefString::from(password.as_str()))),
+            None => callback.cancel(),
+        }
+        if let Some(alert) = self.auth_sheet.take()
+            && let Some(parent) = alert.window().sheetParent()
+        {
+            parent.endSheet_returnCode(&alert.window(), 1001);
+        }
+        self.tell();
     }
 
     /// The address it shows now.
@@ -684,6 +826,14 @@ impl Shared {
             dialog: self.dialog.borrow().as_ref().map(|(_, _, dialog)| dialog.clone()),
             imported,
             extensions,
+            engine: "chromium",
+            certificate: self.certificate.borrow().as_ref().map(|(_, notice)| views::Certificate { site: notice.site.clone(), reason: notice.reason.clone() }),
+            auth: self.auth.borrow().as_ref().map(|(_, site)| views::Auth { site: site.clone() }),
+            find: self.find.borrow().as_ref().map(|(_, matches, current)| {
+                let (matches, current, found) = prompts::shown_find(*matches, *current, imported);
+                views::Found { matches, current, found }
+            }),
+            zoom: self.zoom.get(),
         };
         if self.told_last.borrow().as_ref() != Some(&state) {
             self.told_last.replace(Some(state.clone()));
@@ -956,6 +1106,9 @@ wrap_client! {
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(PageKeys::new(self.page.clone()))
         }
+        fn find_handler(&self) -> Option<FindHandler> {
+            Some(PageFind::new(self.page.clone()))
+        }
         fn jsdialog_handler(&self) -> Option<JsdialogHandler> {
             Some(PageDialogs::new(self.page.clone()))
         }
@@ -1071,6 +1224,10 @@ wrap_load_handler! {
             let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser)) else { return };
             if let Some(frame) = frame.filter(|frame| frame.is_main() != 0) {
                 page.committed(CefString::from(&frame.url()).to_string());
+                page.find.replace(None);
+                if page.zoom.get() != 100 {
+                    page.apply_zoom();
+                }
                 page.tell();
             }
         }
@@ -1085,6 +1242,13 @@ wrap_load_handler! {
             page.tell();
         }
     }
+}
+
+/// The `ERR_CERT_...` name in what Debug writes of a Chromium error code.
+fn error_name(debug: &str) -> &str {
+    let at = debug.find("ERR_").unwrap_or(debug.len());
+    let name = &debug[at..];
+    &name[..name.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(name.len())]
 }
 
 /// What the page says of a load that failed, from Chromium's error name (`net::ERR_NAME_NOT_RESOLVED`).
@@ -1135,6 +1299,15 @@ wrap_request_handler! {
             let url = request.map(|request| CefString::from(&request.url()).to_string()).unwrap_or_default();
             let main_frame = frame.is_none_or(|frame| frame.is_main() != 0);
             let allowed = crate::web::may_navigate(&url, main_frame);
+            let mut browser = browser;
+            if allowed
+                && main_frame
+                && let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser.as_deref_mut()))
+            {
+                // A new address gives up the certificate choice the last one waited on, and says where the main frame goes.
+                page.resolve_certificate(prompts::Choice::Back);
+                page.navigating.replace(prompts::site_of(&url).unwrap_or_default());
+            }
             if let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser))
                 && allowed
                 && main_frame
@@ -1143,6 +1316,41 @@ wrap_request_handler! {
                 page.chain_tainted.set(true);
             }
             i32::from(!allowed)
+        }
+
+        /// A site whose certificate Chromium refuses: one the person chose to open goes on; the main page asks the person in the
+        /// plugin's notice (`State::certificate`), which waits; a picture or a frame from such a site is refused.
+        fn on_certificate_error(&self, browser: Option<&mut Browser>, cert_error: Errorcode, request_url: Option<&CefString>, _ssl_info: Option<&mut Sslinfo>, callback: Option<&mut Callback>) -> ::std::os::raw::c_int {
+            let (Some(page), Some(callback)) = (self.page.upgrade().filter(|page| page.browser_is(browser)), callback) else { return 0 };
+            let url = text(request_url);
+            let Some(site) = prompts::site_of(&url) else { return 0 };
+            if prompts::trusted(&page.web_dir, &site) {
+                callback.cont();
+                return 1;
+            }
+            if *page.navigating.borrow() != site {
+                return 0;
+            }
+            let reason = prompts::chromium_reason(error_name(&format!("{cert_error:?}")));
+            page.resolve_certificate(prompts::Choice::Back);
+            if let Some(notice) = prompts::notice(&page.web_dir, &url, reason) {
+                page.certificate.replace(Some((callback.clone(), notice)));
+                page.tell();
+                return 1;
+            }
+            0
+        }
+
+        /// A server's basic or digest sign-in asks the person in Wings' sheet; other schemes are refused as before.
+        fn auth_credentials(&self, browser: Option<&mut Browser>, _origin_url: Option<&CefString>, is_proxy: ::std::os::raw::c_int, host: Option<&CefString>, port: ::std::os::raw::c_int, realm: Option<&CefString>, scheme: Option<&CefString>, callback: Option<&mut AuthCallback>) -> ::std::os::raw::c_int {
+            // Chromium asks on its IO thread (measured in 158), where nothing of the page may be touched: the request goes to
+            // the UI thread with the browser's id, which finds the page there (`AskAuth`).
+            let (Some(browser), Some(callback)) = (browser, callback) else { return 0 };
+            if !prompts::asks_for_a_password(&text(scheme)) {
+                return 0;
+            }
+            let mut task = AskAuth::new(browser.identifier(), callback.clone(), prompts::auth_site(&text(host), port), text(realm), is_proxy != 0);
+            post_task(ThreadId::UI, Some(&mut task))
         }
 
         /// A site asking for a client certificate gets none, with no Chrome dialog to pick one, as WebKit in Wings sends
@@ -1188,6 +1396,51 @@ wrap_request_handler! {
     }
 }
 
+// A server's sign-in request, carried from Chromium's IO thread to the UI thread: the page of the browser `browser` asks
+// the person in Wings' sheet, or the request is cancelled when that page is gone.
+wrap_task! {
+    struct AskAuth {
+        browser: i32,
+        callback: AuthCallback,
+        site: String,
+        realm: String,
+        proxy: bool,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            let page = PAGES.with_borrow(|pages| {
+                pages.iter().filter_map(Weak::upgrade).find(|page| page.browser.borrow().as_ref().map(Browser::identifier) == Some(self.browser))
+            });
+            match page {
+                Some(page) => page.wait_for_auth(self.callback.clone(), self.site.clone(), &self.realm, self.proxy),
+                None => self.callback.cancel(),
+            }
+        }
+    }
+}
+
+wrap_find_handler! {
+    struct PageFind {
+        page: Weak<Shared>,
+    }
+
+    impl FindHandler {
+        /// How many matches the search has and which is current, as Chromium counts them.
+        fn on_find_result(&self, browser: Option<&mut Browser>, _identifier: ::std::os::raw::c_int, count: ::std::os::raw::c_int, _selection_rect: Option<&Rect>, active_match_ordinal: ::std::os::raw::c_int, _final_update: ::std::os::raw::c_int) {
+            let Some(page) = self.page.upgrade().filter(|page| page.browser_is(browser)) else { return };
+            if let Some((_, matches, current)) = page.find.borrow_mut().as_mut() {
+                // A count of -1 is an update that has none yet.
+                if count >= 0 {
+                    *matches = Some(count as u32);
+                }
+                *current = active_match_ordinal.max(0) as u32;
+            }
+            page.tell();
+        }
+    }
+}
+
 wrap_keyboard_handler! {
     struct PageKeys {
         page: Weak<Shared>,
@@ -1209,10 +1462,11 @@ wrap_keyboard_handler! {
             // SAFETY: CEF hands the NSEvent it is handling, alive for the call.
             let Some(ns_event) = (unsafe { os_event.cast::<NSEvent>().as_ref() }) else { return 0 };
             let Some(press) = focus::press_of(ns_event) else { return 0 };
-            if !keys::goes_to_wings_now(&press) {
+            if !keys::goes_to_wings_now(&press, page.told.page_id()) {
                 return 0;
             }
             page.forwarded.set(Some(event.native_key_code));
+            crate::web::key_from(page.told.page_id());
             if let Some(parent) = page.parent.borrow().clone() {
                 focus::to_wings(ns_event, &parent);
             }
@@ -1362,6 +1616,13 @@ mod tests {
     fn a_stopped_download_says_why_with_chromiums_name_for_it() {
         assert_eq!(super::interrupted("DownloadInterruptReason(CEF_DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED)"), "The download stopped (NETWORK_FAILED)");
         assert_eq!(super::interrupted("something else"), "The download stopped");
+    }
+
+    #[test]
+    fn a_certificate_errors_name_is_read_from_its_debug_text() {
+        assert_eq!(super::error_name("Errorcode(ERR_CERT_AUTHORITY_INVALID)"), "ERR_CERT_AUTHORITY_INVALID");
+        assert_eq!(super::error_name("ERR_CERT_DATE_INVALID"), "ERR_CERT_DATE_INVALID");
+        assert_eq!(super::error_name("something"), "");
     }
 
     #[test]

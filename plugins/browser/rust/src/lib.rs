@@ -10,6 +10,7 @@
 
 mod address;
 mod agent_demo;
+mod agent_input;
 mod agent_js;
 #[cfg(feature = "settings")]
 mod agent_settings;

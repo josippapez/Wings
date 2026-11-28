@@ -47,6 +47,11 @@ pub struct Tab {
     pub opened_by: Option<String>,
     /// The address of the last window its page opened by itself, which wasn't opened.
     pub blocked: Option<String>,
+    /// The text of the find bar while it is open under the toolbar, and how often the bar or the address field was asked
+    /// to take the keyboard (each count is a new field, which focuses as it appears).
+    pub find: Option<String>,
+    pub find_focus: u32,
+    pub address_focus: u32,
 }
 
 impl Tab {
@@ -71,6 +76,9 @@ impl Tab {
             popup: None,
             opened_by: None,
             blocked: None,
+            find: None,
+            find_focus: 0,
+            address_focus: 0,
         }
     }
 
@@ -109,7 +117,12 @@ pub struct Tabs {
     token: u64,
     /// The address and group the page was last opened with, so a restart doesn't open them again.
     pub args_seen: String,
+    /// The addresses of the person's own tabs closed lately, the last one last, for Reopen closed tab.
+    pub closed: Vec<String>,
 }
+
+/// How many closed tabs Reopen keeps.
+const CLOSED_KEPT: usize = 10;
 
 impl Default for Tabs {
     fn default() -> Self {
@@ -120,7 +133,7 @@ impl Default for Tabs {
 impl Tabs {
     /// The page's first tab: at `url`, or blank, in `group` (key and name) or the person's own.
     pub fn new(url: Option<&str>, group: Option<(&str, &str)>) -> Self {
-        let mut tabs = Self { list: Vec::new(), active: String::new(), groups: Vec::new(), own_active: None, next: 1, token: 0, args_seen: String::new() };
+        let mut tabs = Self { list: Vec::new(), active: String::new(), groups: Vec::new(), own_active: None, next: 1, token: 0, args_seen: String::new(), closed: Vec::new() };
         let id = tabs.open(group, url);
         tabs.active = id;
         tabs
@@ -277,6 +290,11 @@ impl Tabs {
         let before = self.order();
         let place = before.iter().position(|other| other == id).unwrap_or(0);
         let gone = self.list.remove(at);
+        if gone.group.is_none() && !gone.blank {
+            self.closed.push(gone.url().to_owned());
+            let extra = self.closed.len().saturating_sub(CLOSED_KEPT);
+            self.closed.drain(..extra);
+        }
         let tokens = gone.commands.iter().filter_map(|command| command["token"].as_u64()).collect();
         if let Some(key) = &gone.group {
             if self.of(key).is_empty() {
@@ -299,6 +317,12 @@ impl Tabs {
             self.activate(&next);
         }
         tokens
+    }
+
+    /// Opens the address of the tab the person closed last as a tab of their own: its id, or none when none was closed.
+    pub fn reopen(&mut self) -> Option<String> {
+        let url = self.closed.pop()?;
+        Some(self.open(None, Some(&url)))
     }
 
     /// Notes that `id` is in use at `now`, which keeps it from the idle check.
@@ -448,6 +472,21 @@ mod tests {
         tabs.activate("t1");
         tabs.close(&d);
         assert_eq!(tabs.active, "t1");
+    }
+
+    #[test]
+    fn the_last_tab_the_person_closed_comes_back_and_a_blank_one_or_an_agents_does_not() {
+        let mut tabs = Tabs::new(Some("https://a.com/"), None);
+        let b = tabs.open(None, Some("https://b.com/"));
+        let blank = tabs.open(None, None);
+        let agent = tabs.open(Some(A), Some("https://agent.com/"));
+        assert_eq!(tabs.close(&blank).len() + tabs.close(&agent).len(), 0);
+        assert_eq!(tabs.reopen(), None, "a blank tab and an agent's tab leave nothing to reopen");
+        tabs.close(&b);
+        let again = tabs.reopen().expect("b.com comes back");
+        assert_eq!(tabs.get(&again).map(Tab::url), Some("https://b.com/"));
+        assert_eq!(tabs.active, again);
+        assert_eq!(tabs.reopen(), None, "once");
     }
 
     #[test]

@@ -8,6 +8,7 @@
 
 use crate::{
     agent_demo::{self, Recorder},
+    agent_input,
     agent_js::{self, SNAPSHOT_MAX},
     agent_webmcp,
     address::resolve,
@@ -21,7 +22,7 @@ use std::{cell::RefCell, collections::HashMap};
 use wings_plugin::{
     host, messages,
     task::{Sender, oneshot, spawn},
-    ui::{Node, bar, button, card, dot, row, small, stack, title_with_context},
+    ui::{Node, WebInput, WebNetwork, WebState, bar, button, card, dot, row, small, stack, title_with_context},
 };
 
 /// How long a page waits for what the web view answers to a script or a picture.
@@ -101,10 +102,23 @@ fn tab_status(tab: &str) -> Value {
             "id": id, "project": project, "popped": popped, "tab": tab.id, "group": page.tabs.group_name(tab).unwrap_or_default(),
             "url": agent_url(&tab.state), "title": if tab.state.imported { "" } else { tab.state.title.as_str() },
             "loading": tab.state.loading, "canGoBack": tab.state.can_go_back, "canGoForward": tab.state.can_go_forward,
-            "dialog": tab.state.dialog, "blockedPopup": tab.blocked.as_deref().map(origin_of),
+            "dialog": tab.state.dialog, "waiting": waiting_on(&tab.state).map(|(what, site)| json!({ "for": what, "site": site })), "blockedPopup": tab.blocked.as_deref().map(origin_of),
         })
     })
 }
+
+/// What the page waits on the person for, and the site: a certificate to choose about (the notice's buttons) or a name and a
+/// password (Wings' sheet). No agent tool answers either or clicks through the page meanwhile.
+fn waiting_on(state: &WebState) -> Option<(&'static str, String)> {
+    match (&state.certificate, &state.auth) {
+        (Some((site, _)), _) => Some(("certificate", site.clone())),
+        (None, Some(site)) => Some(("auth", site.clone())),
+        _ => None,
+    }
+}
+
+/// The ops that only look at the page or move its window, which go on while it waits on the person.
+const WHILE_WAITING: [&str; 8] = ["status", "screenshot", "wait_for", "handoff", "pop_out", "pop_in", "resize", "logs"];
 
 /// This page as main wants it: who, where, which groups it has, and what the person's own tab shows.
 fn status() -> Value {
@@ -164,6 +178,92 @@ async fn command(tab: &str, make: impl FnOnce(u64) -> Value) -> Result<Value, St
 async fn helper(tab: &str, func: &str, args: &[Value]) -> Result<Value, String> {
     let script = agent_js::body(func, args);
     command(tab, |token| wings_plugin::ui::web_eval(&script, false, token)).await
+}
+
+/// What the app answers to real input on WebKit (`web::NEEDS_CHROMIUM`), and on a page that shows a password or card field
+/// (`guard::SECRET_FIELDS`): the tool goes on with the helper, as it did before there was real input. WebKit gets no new
+/// way to act: the helper is its fallback for reading and searching pages.
+fn helper_instead(why: &str) -> bool {
+    why.contains("needs the Chromium engine") || why.contains("password or card field")
+}
+
+/// Sends real input to the tab, or none when the page can't take it (`helper_instead`).
+async fn real(tab: &str, events: Vec<WebInput>) -> Option<Result<Value, String>> {
+    match command(tab, |token| wings_plugin::ui::web_input(&events, token)).await {
+        Err(why) if helper_instead(&why) => None,
+        other => Some(other),
+    }
+}
+
+/// `click` or `hover` of a ref: the helper says where the element is (it is scrolled to first), and real input goes there.
+/// What a real click would open a system picker on, or an element with nothing to click, goes to the helper.
+async fn pointer(tab: &str, tool: &str, reference: &str) -> Result<Value, String> {
+    let at = helper(tab, "locate", &[json!(reference)]).await?;
+    if let (true, Some(x), Some(y)) = (at["plain"] == true, at["x"].as_f64(), at["y"].as_f64()) {
+        let events = if tool == "hover" { agent_input::hover(x, y) } else { agent_input::click(x, y) };
+        if let Some(done) = real(tab, events).await {
+            return done.map(|_| json!(format!("{} {reference}", if tool == "hover" { "Hovered" } else { "Clicked" })));
+        }
+    }
+    helper(tab, tool, &[json!(reference)]).await
+}
+
+/// `fill`: the field is focused and its content selected, then the value is typed over it, so the page sees the typing.
+async fn fill(tab: &str, reference: &str, value: &str) -> Result<Value, String> {
+    let field = helper(tab, "focus_all", &[json!(reference)]).await?;
+    if field["plain"] == true
+        && let Some(done) = real(tab, agent_input::replace(value)).await
+    {
+        return done.map(|_| json!(format!("Filled {reference}")));
+    }
+    helper(tab, "fill", &[json!(reference), json!(value)]).await
+}
+
+/// `type`: into what has the focus.
+async fn type_text(tab: &str, typed: &str) -> Result<Value, String> {
+    let events = agent_input::type_text(typed)?;
+    helper(tab, "focused", &[]).await?;
+    match real(tab, events).await {
+        Some(done) => done.map(|_| json!(format!("Typed {} characters", typed.chars().count()))),
+        None => helper(tab, "type", &[json!(typed)]).await,
+    }
+}
+
+/// `press`: a key the table knows is real input; any other goes to the helper.
+async fn press(tab: &str, combo: &str) -> Result<Value, String> {
+    if let Ok(events) = agent_input::press(combo)
+        && let Some(done) = real(tab, events).await
+    {
+        return done.map(|_| json!(format!("Pressed {combo}")));
+    }
+    helper(tab, "press", &[json!(combo)]).await
+}
+
+/// `drag` from one ref to another with the pointer, unless either has nothing to point at or the source would start the
+/// system's own drag (a link, an image, anything `draggable`), which the helper's page events do without.
+async fn drag(tab: &str, from: &str, to: &str) -> Result<Value, String> {
+    let (a, b) = (helper(tab, "locate", &[json!(from)]).await?, helper(tab, "locate", &[json!(to)]).await?);
+    let point = |at: &Value| Some((at["x"].as_f64()?, at["y"].as_f64()?));
+    if let (true, true, false, Some(start), Some(end)) = (a["plain"] == true, b["plain"] == true, a["drag"] == true, point(&a), point(&b))
+        && let Some(done) = real(tab, agent_input::drag(start, end)).await
+    {
+        return done.map(|_| json!(format!("Dragged {from} to {to}")));
+    }
+    helper(tab, "drag", &[json!(from), json!(to)]).await
+}
+
+/// The page's requests, kept by Chromium; WebKit answers that it needs Chromium.
+async fn network(tab: &str, op: &Value) -> Result<Value, String> {
+    let wanted = WebNetwork {
+        url: op["url"].as_str(),
+        status: op["status"].as_str(),
+        kind: op["type"].as_str(),
+        since: op["since"].as_f64(),
+        limit: op["limit"].as_u64().map(|limit| limit.min(500) as u32),
+        detail: op["detail"].as_str(),
+        body: op["body"] == true,
+    };
+    command(tab, |token| wings_plugin::ui::web_network(&wanted, token)).await
 }
 
 fn text<'a>(op: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -420,6 +520,13 @@ pub async fn run(op: Value) -> Result<Value, String> {
     }
     let tab = target(&key)?;
     with(|page| page.tabs.touch(&tab, host::now()));
+    let waiting = with(|page| page.tabs.get(&tab).and_then(|tab| waiting_on(&tab.state)));
+    if let (Some((what, _)), false) = (&waiting, WHILE_WAITING.contains(&name_of)) {
+        return Err(match *what {
+            "certificate" => "The page waits for the person to choose about its certificate. Use handoff to ask them, and don't click through it.".into(),
+            _ => "The page waits for the person to type a name and a password in the sheet over the window. Use handoff to ask them.".into(),
+        });
+    }
     match name_of {
         "status" => Ok(tab_status(&tab)),
         "screenshot" => {
@@ -428,13 +535,14 @@ pub async fn run(op: Value) -> Result<Value, String> {
             Ok(shot)
         }
         "snapshot" => helper(&tab, "snapshot", &[json!(SNAPSHOT_MAX)]).await,
-        "click" | "hover" => helper(&tab, name_of, &[string("ref")?]).await,
-        "fill" => helper(&tab, "fill", &[string("ref")?, string("value")?]).await,
-        "type" => helper(&tab, "type", &[string("text")?]).await,
-        "press" => helper(&tab, "press", &[string("key")?]).await,
+        "click" | "hover" => pointer(&tab, name_of, text(&op, "ref")?).await,
+        "fill" => fill(&tab, text(&op, "ref")?, text(&op, "value")?).await,
+        "type" => type_text(&tab, text(&op, "text")?).await,
+        "press" => press(&tab, text(&op, "key")?).await,
         "select" => helper(&tab, "select", &[string("ref")?, op["values"].clone()]).await,
         "scroll" => helper(&tab, "scroll", &[json!({ "ref": op["ref"], "to": op["to"], "x": op["x"], "y": op["y"] })]).await,
-        "drag" => helper(&tab, "drag", &[string("from")?, string("to")?]).await,
+        "drag" => drag(&tab, text(&op, "from")?, text(&op, "to")?).await,
+        "network" => network(&tab, &op).await,
         "eval" => command(&tab, |token| wings_plugin::ui::web_eval(op["script"].as_str().unwrap_or_default(), true, token)).await,
         "logs" => command(&tab, |token| json!({ "action": "logs", "token": token })).await,
         "dialog" => {
@@ -686,10 +794,10 @@ mod tests {
         result(&json!({ "token": command["token"], "value": 1 }));
         testing::settle();
         assert_eq!(out.borrow().clone(), Some(Ok(json!(1))));
-        // The helper's calls run in the isolated world, and a failure is the view's error.
+        // The helper's calls run in the isolated world, and a failure is the view's error: a click asks where the element is.
         let out = run_op(json!({ "op": "click", "ref": "e1" }));
         let command = with(|page| page.tabs.active_tab().commands.last().cloned()).unwrap();
-        assert!(command.get("world").is_none() && command["script"].as_str().unwrap().ends_with("return w.click(\"e1\");"));
+        assert!(command.get("world").is_none() && command["script"].as_str().unwrap().ends_with("return w.locate(\"e1\");"));
         result(&json!({ "token": command["token"], "error": "Ref e1 is stale" }));
         testing::settle();
         assert_eq!(out.borrow().clone(), Some(Err("Ref e1 is stale".into())));
@@ -1091,5 +1199,141 @@ mod tests {
         testing::set_now(host::now() + 5000.0);
         run_op(json!({ "op": "snapshot", "caller": caller_for("ses-a", "A") }));
         assert_eq!(with(|page| page.tabs.get("t2").unwrap().used), Some(host::now()));
+    }
+
+    /// The last command sent to `tab`, answered with the error `why`.
+    fn fail_last(tab: &str, why: &str) -> Value {
+        let command = with(|page| page.tabs.get(tab).unwrap().commands.last().cloned()).unwrap();
+        result(&json!({ "token": command["token"], "error": why }));
+        testing::settle();
+        command
+    }
+
+    fn last_command(tab: &str) -> Value {
+        with(|page| page.tabs.get(tab).unwrap().commands.last().cloned()).unwrap()
+    }
+
+    fn kinds_of(command: &Value) -> Vec<String> {
+        command["events"].as_array().unwrap().iter().map(|event| event["type"].as_str().unwrap_or("text").to_owned()).collect()
+    }
+
+    /// On a Chromium page a click is the helper finding the element, then real mouse events at its centre, and the answer is
+    /// the helper's own words; the helper's synthetic click isn't sent.
+    #[test]
+    fn a_click_finds_the_element_then_sends_real_mouse_events_at_its_centre() {
+        record();
+        person_at("https://mine.com/");
+        let out = run_op(json!({ "op": "click", "ref": "e1" }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.locate(\"e1\");"));
+        answer_last("t1", json!({ "x": 120.5, "y": 44.0, "plain": true, "drag": false }));
+        let sent = last_command("t1");
+        assert_eq!(sent["action"], "input");
+        assert_eq!(kinds_of(&sent), ["mouseMoved", "mousePressed", "mouseReleased"]);
+        assert_eq!((sent["events"][1]["x"].clone(), sent["events"][1]["y"].clone(), sent["events"][1]["clickCount"].clone()), (json!(120.5), json!(44.0), json!(1)));
+        answer_last("t1", json!({ "events": 3 }));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!("Clicked e1"))));
+        let out = run_op(json!({ "op": "hover", "ref": "e1" }));
+        answer_last("t1", json!({ "x": 1.0, "y": 2.0, "plain": true }));
+        assert_eq!(kinds_of(&last_command("t1")), ["mouseMoved"]);
+        answer_last("t1", json!({ "events": 1 }));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!("Hovered e1"))));
+    }
+
+    /// WebKit says it needs Chromium, and a page with a password field refuses real input: the helper clicks, as before.
+    /// An element a real click would open a picker on, or that shows nowhere, goes to the helper without asking.
+    #[test]
+    fn a_click_the_page_cant_take_as_real_input_is_the_helpers_as_before() {
+        for why in ["This needs the Chromium engine: turn it on in Browser settings.", "This page has a password or card field, so scripts can't run on it. Use handoff for sign-ins."] {
+            record();
+            person_at("https://mine.com/");
+            let out = run_op(json!({ "op": "click", "ref": "e1" }));
+            answer_last("t1", json!({ "x": 5.0, "y": 5.0, "plain": true }));
+            fail_last("t1", why);
+            assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.click(\"e1\");"), "{why}");
+            answer_last("t1", json!("Clicked e1"));
+            assert_eq!(out.borrow().clone(), Some(Ok(json!("Clicked e1"))));
+        }
+        record();
+        person_at("https://mine.com/");
+        let out = run_op(json!({ "op": "click", "ref": "e3" }));
+        answer_last("t1", json!({ "x": 5.0, "y": 5.0, "plain": false }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.click(\"e3\");"), "a select or a file input: no real click");
+        answer_last("t1", json!("Clicked e3"));
+        assert!(out.borrow().clone().unwrap().is_ok());
+        // An error that isn't one of those two is the answer.
+        let out = run_op(json!({ "op": "click", "ref": "e1" }));
+        answer_last("t1", json!({ "x": 5.0, "y": 5.0, "plain": true }));
+        fail_last("t1", "Wings couldn't check this page for password and card fields, so nothing ran: try again");
+        assert!(out.borrow().clone().unwrap().unwrap_err().contains("try again"));
+    }
+
+    #[test]
+    fn fill_selects_the_field_then_types_over_it_and_type_and_press_send_text_and_keys() {
+        record();
+        person_at("https://mine.com/");
+        let out = run_op(json!({ "op": "fill", "ref": "e2", "value": "ana@example.com" }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.focus_all(\"e2\");"));
+        answer_last("t1", json!({ "plain": true }));
+        assert_eq!(last_command("t1")["events"], json!([{ "t": "text", "text": "ana@example.com" }]));
+        answer_last("t1", json!({ "events": 1 }));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!("Filled e2"))));
+        // A field real typing can't fill (a date) is filled by the helper.
+        let out = run_op(json!({ "op": "fill", "ref": "e4", "value": "2026-01-02" }));
+        answer_last("t1", json!({ "plain": false }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.fill(\"e4\", \"2026-01-02\");"));
+        answer_last("t1", json!("Filled e4"));
+        assert!(out.borrow().clone().unwrap().is_ok());
+        // Typing needs a focused element first, then inserts the text.
+        let out = run_op(json!({ "op": "type", "text": "héllo" }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.focused();"));
+        answer_last("t1", json!(true));
+        assert_eq!(last_command("t1")["events"], json!([{ "t": "text", "text": "héllo" }]));
+        answer_last("t1", json!({ "events": 1 }));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!("Typed 5 characters"))));
+        let out = run_op(json!({ "op": "type", "text": "x" }));
+        fail_last("t1", "Nothing has focus: click or fill a field first");
+        assert!(out.borrow().clone().unwrap().unwrap_err().contains("Nothing has focus"));
+        // A key goes down and up; a combo with a modifier holds it between; one the table doesn't know is the helper's.
+        let out = run_op(json!({ "op": "press", "key": "Control+a" }));
+        assert_eq!(kinds_of(&last_command("t1")), ["rawKeyDown", "rawKeyDown", "keyUp", "keyUp"]);
+        answer_last("t1", json!({ "events": 4 }));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!("Pressed Control+a"))));
+        run_op(json!({ "op": "press", "key": "Control+Enterr" }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.press(\"Control+Enterr\");"));
+    }
+
+    /// A drag between two plain elements is the pointer's; one from a link, an image or a draggable would start the system's
+    /// own drag, so it is the helper's.
+    #[test]
+    fn a_drag_is_the_pointers_unless_the_source_would_start_the_systems_own_drag() {
+        record();
+        person_at("https://mine.com/");
+        let out = run_op(json!({ "op": "drag", "from": "e1", "to": "e2" }));
+        answer_last("t1", json!({ "x": 10.0, "y": 10.0, "plain": true, "drag": false }));
+        answer_last("t1", json!({ "x": 90.0, "y": 50.0, "plain": true, "drag": false }));
+        let kinds = kinds_of(&last_command("t1"));
+        assert_eq!((kinds.first().map(String::as_str), kinds.get(1).map(String::as_str), kinds.last().map(String::as_str)), (Some("mouseMoved"), Some("mousePressed"), Some("mouseReleased")));
+        answer_last("t1", json!({ "events": kinds.len() }));
+        assert_eq!(out.borrow().clone(), Some(Ok(json!("Dragged e1 to e2"))));
+        run_op(json!({ "op": "drag", "from": "e1", "to": "e2" }));
+        answer_last("t1", json!({ "x": 10.0, "y": 10.0, "plain": true, "drag": true }));
+        answer_last("t1", json!({ "x": 90.0, "y": 50.0, "plain": true, "drag": false }));
+        assert!(last_command("t1")["script"].as_str().unwrap().ends_with("return w.drag(\"e1\", \"e2\");"));
+    }
+
+    /// The network tool asks the app with its filters, and WebKit's answer that it needs Chromium is the tool's.
+    #[test]
+    fn network_asks_the_app_with_its_filters_and_passes_its_answer_on() {
+        record();
+        person_at("https://mine.com/");
+        let out = run_op(json!({ "op": "network", "url": "/api", "status": "4xx", "type": "XHR", "since": 5.0, "limit": 20, "detail": null, "body": false }));
+        let sent = last_command("t1");
+        assert_eq!((sent["action"].clone(), sent["url"].clone(), sent["status"].clone(), sent["type"].clone(), sent["since"].clone(), sent["limit"].clone()), (json!("network"), json!("/api"), json!("4xx"), json!("XHR"), json!(5.0), json!(20)));
+        answer_last("t1", json!({ "requests": [], "matching": 0, "kept": 0, "now": 1.0 }));
+        assert_eq!(out.borrow().clone().unwrap().unwrap()["matching"], 0);
+        let out = run_op(json!({ "op": "network", "detail": "1.1", "body": true }));
+        assert_eq!(last_command("t1")["detail"], "1.1");
+        fail_last("t1", "This needs the Chromium engine: turn it on in Browser settings.");
+        assert!(out.borrow().clone().unwrap().unwrap_err().contains("needs the Chromium engine"));
     }
 }

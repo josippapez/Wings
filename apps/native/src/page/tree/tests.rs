@@ -1502,3 +1502,121 @@ fn a_record_command_is_one_of_four_and_a_start_has_an_mp4_path_and_a_sane_rate()
     assert_eq!(web_go(json!({"action":"record","do":"pause","token":1})), None);
     assert_eq!(web_go(json!({"action":"record","token":1})), None);
 }
+
+#[test]
+fn an_input_command_is_a_short_list_of_mouse_key_and_text_events_in_bounds() {
+    let input = |events: serde_json::Value| web_go(json!({"action":"input","events":events,"token":1}));
+    let click = json!([
+        {"t":"mouse","type":"mouseMoved","x":10.5,"y":20},
+        {"t":"mouse","type":"mousePressed","x":10.5,"y":20,"button":"left","buttons":1,"clickCount":1},
+        {"t":"mouse","type":"mouseReleased","x":10.5,"y":20,"button":"left","clickCount":1}
+    ]);
+    assert_eq!(
+        input(click.clone()),
+        Some(WebGo::Input(vec![
+            WebInput::Mouse { kind: "mouseMoved", x: 10.5, y: 20.0, button: "none", buttons: 0, click_count: 0, modifiers: 0 },
+            WebInput::Mouse { kind: "mousePressed", x: 10.5, y: 20.0, button: "left", buttons: 1, click_count: 1, modifiers: 0 },
+            WebInput::Mouse { kind: "mouseReleased", x: 10.5, y: 20.0, button: "left", buttons: 0, click_count: 1, modifiers: 0 },
+        ]))
+    );
+    assert_eq!(
+        input(json!([{"t":"key","type":"rawKeyDown","key":"a","code":"KeyA","vk":65,"modifiers":2,"commands":["selectAll"]},{"t":"text","text":"hi\n"}])),
+        Some(WebGo::Input(vec![
+            WebInput::Key { kind: "rawKeyDown", key: "a".into(), code: "KeyA".into(), vk: 65, text: None, modifiers: 2, commands: vec!["selectAll"] },
+            WebInput::Text("hi\n".into()),
+        ]))
+    );
+    for refused in [
+        json!([]),
+        json!([{"t":"mouse","type":"mouseWheel","x":1,"y":1}]),
+        json!([{"t":"mouse","type":"mouseMoved","x":1e9,"y":1}]),
+        json!([{"t":"mouse","type":"mouseMoved","x":1,"y":1,"button":"right"}]),
+        json!([{"t":"mouse","type":"mouseMoved","x":1,"y":1,"clickCount":99}]),
+        json!([{"t":"key","type":"keyDown","key":"a","commands":["format"]}]),
+        json!([{"t":"key","type":"keyDown","key":"a","modifiers":16}]),
+        json!([{"t":"key","type":"keyDown","key":"a".repeat(33)}]),
+        json!([{"t":"text","text":""}]),
+        json!([{"t":"text","text":"a".repeat(100_001)}]),
+        json!([{"t":"script","text":"1"}]),
+        json!(vec![json!({"t":"text","text":"a"}); 257]),
+        json!("click"),
+    ] {
+        assert_eq!(input(refused.clone()), None, "{refused}");
+    }
+    assert_eq!(web_go(json!({"action":"input","token":1})), None, "no events");
+}
+
+#[test]
+fn a_network_command_filters_in_bounds_and_a_body_needs_a_request() {
+    let network = |extra: serde_json::Value| {
+        let mut command = json!({"action":"network","token":1});
+        for (key, value) in extra.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        web_go(command)
+    };
+    assert_eq!(network(json!({})), Some(WebGo::Network(WebNetwork { limit: 100, ..Default::default() })));
+    assert_eq!(
+        network(json!({"url":"/api/","status":"4xx","type":"XHR","since":1700000000000.0,"limit":20})),
+        Some(WebGo::Network(WebNetwork { url: Some("/api/".into()), status: Some("4xx".into()), kind: Some("XHR".into()), since: Some(1.7e12), limit: 20, detail: None, body: false }))
+    );
+    assert_eq!(
+        network(json!({"detail":"1000.5","body":true})),
+        Some(WebGo::Network(WebNetwork { limit: 100, detail: Some("1000.5".into()), body: true, ..Default::default() }))
+    );
+    for refused in [json!({"body":true}), json!({"limit":0}), json!({"limit":501}), json!({"since":-1}), json!({"status":"4xxxxxxxxx"}), json!({"url":""}), json!({"body":"yes","detail":"1"})] {
+        assert_eq!(network(refused.clone()), None, "{refused}");
+    }
+}
+
+#[test]
+fn a_certificate_choice_find_zoom_and_inspect_are_commands_in_bounds() {
+    assert_eq!(web_go(json!({"action":"certificate","proceed":true,"token":1})), Some(WebGo::Certificate { proceed: true }));
+    assert_eq!(web_go(json!({"action":"certificate","proceed":false,"token":1})), Some(WebGo::Certificate { proceed: false }));
+    assert_eq!(web_go(json!({"action":"certificate","token":1})), None, "the choice is said, never assumed");
+    assert_eq!(web_go(json!({"action":"certificate","proceed":"yes","token":1})), None);
+
+    let find = |extra: serde_json::Value| {
+        let mut command = json!({"action":"find","token":1});
+        for (key, value) in extra.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        web_go(command)
+    };
+    assert_eq!(find(json!({"text":"cat"})), Some(WebGo::Find { text: "cat".into(), forward: true, again: false }));
+    assert_eq!(find(json!({"text":"cat","forward":false,"again":true})), Some(WebGo::Find { text: "cat".into(), forward: false, again: true }));
+    assert_eq!(find(json!({})), None, "no text");
+    assert_eq!(find(json!({"text":""})), None, "an empty search is stopFind's");
+    assert_eq!(find(json!({"text":"a\nb"})), None);
+    assert_eq!(find(json!({"text":"a".repeat(501)})), None);
+    assert_eq!(web_go(json!({"action":"stopFind","token":1})), Some(WebGo::StopFind));
+
+    for (name, zoom) in [("in", WebZoom::In), ("out", WebZoom::Out), ("reset", WebZoom::Reset)] {
+        assert_eq!(web_go(json!({"action":"zoom","do":name,"token":1})), Some(WebGo::Zoom(zoom)));
+    }
+    assert_eq!(web_go(json!({"action":"zoom","do":"huge","token":1})), None);
+    assert_eq!(web_go(json!({"action":"zoom","token":1})), None);
+    assert_eq!((WebZoom::In.step(), WebZoom::Out.step(), WebZoom::Reset.step()), (1, -1, 0));
+    assert_eq!(web_go(json!({"action":"inspect","token":1})), Some(WebGo::Inspect));
+}
+
+#[test]
+fn a_page_names_the_keys_it_takes_even_ones_wings_binds_but_never_the_windows_or_the_editing_keys() {
+    let parsed = tree(json!([{"id":1,"type":"Page","props":{
+        "onShortcut":"1:onShortcut",
+        "shortcuts":["cmd-t","cmd-w","cmd-shift-t","cmd-[","cmd-]","cmd-f","cmd-g","cmd-shift-g","cmd-alt-i","cmd-l","cmd-r",
+            "cmd-q","cmd-c","cmd-v","cmd-1","cmd-k","t","shift-t","nonsense",7]
+    },"children":[]}])).unwrap();
+    let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
+    assert_eq!(page.on_shortcut.as_deref(), Some("1:onShortcut"));
+    let names: Vec<_> = page.claims.iter().map(|claim| claim.name.as_str()).collect();
+    assert_eq!(names, ["cmd-t", "cmd-w", "cmd-shift-t", "cmd-[", "cmd-]", "cmd-f", "cmd-g", "cmd-shift-g", "cmd-alt-i", "cmd-l", "cmd-r"]);
+    let shift_t = page.claims.iter().find(|claim| claim.name == "cmd-shift-t").unwrap();
+    assert_eq!((shift_t.key.cmd, shift_t.key.shift, shift_t.key.key.as_str()), (true, true, "t"));
+    // A button's own shortcut still can't take what Wings binds.
+    assert_eq!(Shortcut::parse("cmd-t"), None);
+    assert!(Shortcut::parse_claim("cmd-t").is_some());
+    let none = tree(json!([{"id":1,"type":"Page","props":{},"children":[]}])).unwrap();
+    let Node::Page(page) = &none.children[0] else { panic!("a page") };
+    assert!(page.claims.is_empty() && page.on_shortcut.is_none());
+}

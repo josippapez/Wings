@@ -45,6 +45,23 @@ pub(super) fn text_scale_in(nodes: &[Node]) -> Option<String> {
     })
 }
 
+/// The `Page` of the tree that takes keys for itself (`shortcuts`), wherever in its tree it is.
+pub(super) fn claiming_in(nodes: &[Node]) -> Option<&tree::Page> {
+    nodes.iter().find_map(|node| match node {
+        Node::Page(page) if !page.claims.is_empty() && page.on_shortcut.is_some() => Some(page),
+        other => other.parts().into_iter().find_map(claiming_in),
+    })
+}
+
+/// The claim of `page` that `keystroke` is, if any.
+pub(super) fn claim_of<'a>(page: &'a tree::Page, keystroke: &gpui::Keystroke) -> Option<&'a tree::Claim> {
+    let mods = keystroke.modifiers;
+    page.claims.iter().find(|claim| {
+        (claim.key.cmd, claim.key.ctrl, claim.key.alt, claim.key.shift) == (mods.platform, mods.control, mods.alt, mods.shift)
+            && claim.key.key == keystroke.key
+    })
+}
+
 /// The popup menu the page shows, wherever in its tree it put it.
 pub(super) fn popup_in(nodes: &[Node]) -> Option<&tree::PopupMenu> {
     nodes.iter().rev().find_map(|node| match node {

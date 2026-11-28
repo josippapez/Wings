@@ -106,7 +106,7 @@ pub(super) fn browser(out: PathBuf) {
         picture.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
         wings_native::page::images::register_bytes("browser", id, png).unwrap();
     }
-    let page_state = json!({ "url": "https://github.com/acme/web/pull/482", "title": "acme/web · Pull request #482", "extensions": [
+    let page_state = json!({ "url": "https://github.com/acme/web/pull/482", "title": "acme/web · Pull request #482", "engine": "chromium", "extensions": [
         { "id": "18f2a9c0b1", "name": "Bitwarden Password Manager", "label": "Bitwarden", "icon": "ext-shot-vault", "badge": "3", "enabled": true },
         { "id": "18f2a9c0b2", "name": "React Developer Tools", "label": "React Developer Tools", "icon": "ext-shot-react", "badge": "", "enabled": true },
     ] });
@@ -200,6 +200,26 @@ pub(super) fn browser(out: PathBuf) {
                 save(&mut cx, window, out.join(format!("browser-popup-blocked-{width}.png")));
             }
             if *name == "page" {
+                // A site whose certificate Chromium refused: the notice names it, with the reason and the two choices, and the
+                // error line it would be is left out. The page is zoomed too, which shows its level with a reset.
+                let refused = json!({ "url": "https://staging.acme.test:8443/", "title": "", "engine": "chromium", "zoom": 110, "canGoBack": true,
+                    "error": "The site's certificate isn't valid (ERR_CERT_AUTHORITY_INVALID)",
+                    "certificate": { "site": "staging.acme.test:8443", "reason": "The certificate isn't from an authority this Mac trusts: it may be self-signed." } });
+                assert!(handle.read_with(&cx, |view, _| view.tell_web_state("tab-t1", &refused)).unwrap(), "the page has no web view");
+                wait(&mut cx, window, Duration::from_millis(500));
+                save(&mut cx, window, out.join(format!("browser-page-certificate-{width}.png")));
+                // Cmd-F opens the find bar under the toolbar, with what a search found; the sign-in sheet's wait is said too.
+                let searching = json!({ "url": "https://github.com/acme/web/pull/482", "title": "acme/web · Pull request #482", "engine": "chromium", "zoom": 125,
+                    "find": { "matches": 5, "current": 2, "found": true }, "auth": { "site": "intranet.acme.test" } });
+                assert!(handle.read_with(&cx, |view, _| view.tell_web_state("tab-t1", &searching)).unwrap(), "the page has no web view");
+                let cmd_f = gpui::Keystroke::parse("cmd-f").unwrap();
+                assert!(handle.read_with(&cx, |view, _| view.claim_shortcut(&cmd_f)).unwrap(), "the page doesn't take Cmd-F");
+                wait(&mut cx, window, Duration::from_millis(500));
+                cx.simulate_input(window, "cat");
+                wait(&mut cx, window, Duration::from_millis(800));
+                save(&mut cx, window, out.join(format!("browser-page-find-{width}.png")));
+                assert!(handle.read_with(&cx, |view, _| view.press("Close find", 0)).unwrap(), "no Close find button");
+                assert!(handle.read_with(&cx, |view, _| view.tell_web_state("tab-t1", &page_state)).unwrap(), "the page has no web view");
                 // The More menu of a web page, its item's question, and what the fixture's host (no web engines) answers.
                 // A menu's button has no click of its own for the page: the app opens the menu.
                 assert!(handle.update(&mut cx, |view, _, cx| view.open_menu("More", 0, cx)).unwrap(), "no More menu");

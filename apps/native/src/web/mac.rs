@@ -866,7 +866,11 @@ impl Native for WebPage {
                     let done = tab.map_or(Err(actions::NOT_ON.to_owned()), |tab| actions::perform(&tab, &self.view, id));
                     self.told.tell(Heard::Result { token, result: done.map(|()| serde_json::Value::Null) });
                 }
-                WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Record(_) => {
+                // WebKit is the fallback engine for agents reading pages: the person's dev-side choices are Chromium's.
+                WebGo::Certificate { .. } | WebGo::Find { .. } | WebGo::StopFind | WebGo::Zoom(_) | WebGo::Inspect => {
+                    self.told.tell(Heard::Result { token, result: Err(super::NEEDS_CHROMIUM.into()) });
+                }
+                WebGo::Upload { .. } | WebGo::ScreenshotDiff { .. } | WebGo::Record(_) | WebGo::Input(_) | WebGo::Network(_) => {
                     self.told.tell(Heard::Result { token, result: Err(super::NEEDS_CHROMIUM.into()) });
                 }
                 // Done by `views::update`, whichever engine wrote the file.
@@ -1495,6 +1499,9 @@ impl Observer {
                 dialog: self.ivars().pending.borrow().as_ref().map(|(_, dialog)| dialog.clone()),
                 imported: super::holds_imported(&self.ivars().web_dir, &self.ivars().committed.borrow()),
                 extensions: self.ivars().extensions.borrow().clone(),
+                engine: "webkit",
+                zoom: 100,
+                ..State::default()
             }
         };
         if self.ivars().told_last.borrow().as_ref() != Some(&state) {

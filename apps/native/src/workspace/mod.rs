@@ -353,6 +353,8 @@ pub struct Workspace {
     _activation: Subscription,
     _visibility: Subscription,
     _quit: Subscription,
+    /// Hands the keys a plugin page takes for itself to it before Wings' own actions (`page_claims`).
+    _page_claims: Subscription,
 }
 
 /// A page tab's body, as the desktop's `PluginTab` and `ProjectPageTab`: a card like a pane's, in the same `p-2 pt-0`.
@@ -416,6 +418,13 @@ impl Workspace {
                 quick.view().read(cx).end();
             }
             async {}
+        });
+        let this = cx.weak_entity();
+        let page_claims = cx.intercept_keystrokes(move |event, window, cx| {
+            let keystroke = event.keystroke.clone();
+            if this.update(cx, |this, cx| this.page_claims(&keystroke, window, cx)).unwrap_or(false) {
+                cx.stop_propagation();
+            }
         });
         // Closing the window quits, as Cmd+Q does, with the window still open: closed first, it would drop its
         // terminals, which ends their programs, before the quit that leaves the terminal server's panes running.
@@ -583,6 +592,7 @@ impl Workspace {
                 }
             }),
             _quit: quit,
+            _page_claims: page_claims,
         };
         let env: Arc<dyn Env> = this.plugin_env.clone();
         this.plugins = match (&this.config.plugins, &this.plugin_env.store) {
@@ -774,6 +784,23 @@ impl Workspace {
         };
         let tab = self.plugin_tabs.iter().find(|tab| tab.id == id)?;
         tab.focus.is_focused(window).then(|| tab.page.clone())
+    }
+
+    /// Gives the key to the page of the plugin tab in front when it takes that key for itself (`Page::claims`) and has the
+    /// keyboard, in its fields or on its tab: before Wings' own actions, so a Browser's Cmd-T opens a browser tab and not
+    /// a terminal. Says whether the page took it.
+    fn page_claims(&self, keystroke: &gpui::Keystroke, window: &Window, cx: &gpui::App) -> bool {
+        // A key from the page's own web page is the page's to take even when Wings' focus was left elsewhere, as on a
+        // browser tab since closed.
+        let from_page = crate::web::take_key_from();
+        let Active::Plugin(id) = self.active else {
+            return false;
+        };
+        let Some(tab) = self.plugin_tabs.iter().find(|tab| tab.id == id) else {
+            return false;
+        };
+        let page = tab.page.read(cx);
+        (page.has_keyboard(window, cx) || from_page == Some(tab.page.entity_id())) && page.claim_shortcut(keystroke)
     }
 
     fn page_scales_text(&self, step: &str, window: &Window, cx: &gpui::App) -> bool {

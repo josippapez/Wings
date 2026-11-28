@@ -26,6 +26,8 @@ const OP_MS: u32 = 40_000;
 const OPEN_MS: f64 = 10_000.0;
 /// The most characters of an `eval` answer.
 const EVAL_MAX: usize = 20_000;
+/// The most characters of a network answer: a response body may be 1 MB.
+const NETWORK_MAX: usize = 1_200_000;
 
 const NO_PAGE: &str = "No Browser page is open for this project. Call browser__open with an address first.";
 const NO_TAB: &str = "You have no Browser tab yet. Call browser__open with an address first.";
@@ -259,8 +261,8 @@ fn op_for(tool: &str, input: &Value) -> Result<(Value, u32), String> {
         "tabs" => (op("tabs", &["action", "tab"]), OP_MS),
         "downloads" => (op("downloads", &[]), OP_MS),
         "eval" => (op("eval", &["script"]), OP_MS),
-        // One command answers both; the tool keeps its half.
-        "console" | "network" => (op("logs", &[]), OP_MS),
+        "console" => (op("logs", &[]), OP_MS),
+        "network" => (op("network", &["url", "status", "type", "since", "limit", "detail", "body"]), OP_MS),
         "dialog" => (op("dialog", &["accept", "text"]), OP_MS),
         "wait_for" => {
             if !has("text") && !has("selector") && !has("url") {
@@ -573,7 +575,8 @@ fn present(tool: &str, answer: Value) -> Value {
             if lines.is_empty() { "You have no tabs.".into() } else { lines.join("\n").into() }
         }
         "eval" => cut(serde_json::to_string_pretty(&answer).unwrap_or_default(), EVAL_MAX).into(),
-        "console" | "network" => cut(serde_json::to_string_pretty(&answer[tool]).unwrap_or_default(), EVAL_MAX).into(),
+        "console" => cut(serde_json::to_string_pretty(&answer["console"]).unwrap_or_default(), EVAL_MAX).into(),
+        "network" => network_text(&answer).into(),
         "dialog" => "Answered the page's dialog.".into(),
         "downloads" => {
             let lines: Vec<String> = answer.as_array().into_iter().flatten().map(|download| {
@@ -599,6 +602,31 @@ fn present(tool: &str, answer: Value) -> Value {
         }
         _ => answer,
     }
+}
+
+/// The network tool's answer as text: one line to a request, or a request in full (its headers and body).
+fn network_text(answer: &Value) -> String {
+    let Some(requests) = answer["requests"].as_array() else { return cut(serde_json::to_string_pretty(answer).unwrap_or_default(), NETWORK_MAX) };
+    let line = |request: &Value| {
+        let status = match (request["status"].as_i64(), request["failure"].as_str()) {
+            (_, Some(why)) => format!("FAILED {why}"),
+            (Some(status), None) => status.to_string(),
+            (None, None) => "pending".to_owned(),
+        };
+        let mut more = Vec::new();
+        for (key, unit) in [("mime", ""), ("encodedBytes", " B"), ("durationMs", " ms")] {
+            match &request[key] {
+                Value::String(text) if !text.is_empty() => more.push(format!("{text}{unit}")),
+                Value::Number(number) => more.push(format!("{number}{unit}")),
+                _ => {}
+            }
+        }
+        let started = request["startedAt"].as_f64().map_or(String::new(), |at| format!(" at {at:.0}"));
+        format!("{} {} {status} {} {}{}{started} [{}]", text(request, "id"), text(request, "method"), text(request, "type"), text(request, "url"), if more.is_empty() { String::new() } else { format!(" ({})", more.join(", ")) }, text(request, "initiator"))
+    };
+    let lines: Vec<String> = requests.iter().map(|request| line(request)).collect();
+    let note = format!(" ({} matching, {} kept; now {})", answer["matching"], answer["kept"], answer["now"]);
+    format!("{} request(s){note}, newest last. Id, method, status, type, URL. network with detail set to an id gives headers.\n{}", lines.len(), lines.join("\n"))
 }
 
 /// What a recording call came to, in a line.
@@ -674,12 +702,26 @@ mod tests {
         for (tool, input) in [("click", json!({ "ref": "e1" })), ("snapshot", json!({})), ("eval", json!({ "script": "return 1" }))] {
             assert!(op_for(tool, &input).is_ok(), "{tool}");
         }
-        // The console and the requests come from one ask of the page, and each tool answers its own half.
+        // The console is the page's `logs`; the requests are a command of their own with every filter passed on.
         assert_eq!(op_for("console", &json!({})).unwrap().0, json!({ "op": "logs" }));
-        assert_eq!(op_for("network", &json!({})).unwrap().0, json!({ "op": "logs" }));
-        let logs = json!({ "console": [{ "level": "error", "text": "boom" }], "network": [{ "method": "GET", "url": "https://a.com/x", "status": 500 }] });
-        assert!(present("console", logs.clone()).as_str().unwrap().contains("boom"));
-        assert!(!present("network", logs).as_str().unwrap().contains("boom"));
+        assert_eq!(
+            op_for("network", &json!({ "url": "/api", "status": "4xx", "detail": "1.2", "body": true })).unwrap().0,
+            json!({ "op": "network", "url": "/api", "status": "4xx", "type": null, "since": null, "limit": null, "detail": "1.2", "body": true })
+        );
+        let logs = json!({ "console": [{ "level": "error", "text": "boom", "source": "https://a.com/app.js:3:1" }] });
+        let said = present("console", logs).as_str().unwrap().to_owned();
+        assert!(said.contains("boom") && said.contains("app.js:3:1"));
+        // A list is a line to a request with what an agent decides by; a request in full is its JSON, body included.
+        let list = json!({ "matching": 2, "kept": 2, "now": 1700000000999.0, "requests": [
+            { "id": "1.1", "method": "GET", "url": "https://a.com/x", "type": "Fetch", "status": 500, "mime": "application/json", "encodedBytes": 12.0, "durationMs": 31.5, "startedAt": 1700000000000.0, "initiator": "script https://a.com/app.js:4", "failure": null },
+            { "id": "1.2", "method": "GET", "url": "https://a.com/y", "type": "Image", "status": null, "failure": "net::ERR_ABORTED", "initiator": "parser" }
+        ] });
+        let lines = present("network", list).as_str().unwrap().to_owned();
+        assert!(lines.contains("1.1 GET 500 Fetch https://a.com/x (application/json, 12.0 B, 31.5 ms) at 1700000000000 [script https://a.com/app.js:4]"), "{lines}");
+        assert!(lines.contains("1.2 GET FAILED net::ERR_ABORTED Image https://a.com/y"), "{lines}");
+        assert!(lines.contains("2 request(s) (2 matching, 2 kept"), "{lines}");
+        let full = present("network", json!({ "id": "1.1", "requestHeaders": { "Authorization": "(hidden)" }, "body": "{\"ok\":true}" }));
+        assert!(full.as_str().unwrap().contains("(hidden)") && full.as_str().unwrap().contains("ok"));
         assert_eq!(op_for("dialog", &json!({ "accept": false })).unwrap().0, json!({ "op": "dialog", "accept": false, "text": null }));
     }
 
@@ -1069,7 +1111,7 @@ mod tests {
             }
         }
         assert_eq!(find("recording")["inputSchema"]["properties"]["action"]["enum"], json!(["start", "status", "stop", "cancel"]));
-        assert_eq!(manifest["minWingsVersion"], "0.2.132");
+        assert_eq!(manifest["minWingsVersion"], "0.2.133");
         let instructions = manifest["contributes"]["mcpInstructions"].as_str().unwrap();
         assert!(instructions.chars().count() <= 500 && instructions.contains("upload") && instructions.contains("recording") && instructions.contains("/tmp") && instructions.contains("demonstrate"), "{instructions}");
         // The tools are checked against their schema before they run, so the schema's own limits match the ones main checks.

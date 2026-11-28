@@ -1,8 +1,8 @@
 {
   "id": "browser",
   "name": "Browser",
-  "version": "0.5.1",
-  "minWingsVersion": "0.2.132",
+  "version": "0.6.0",
+  "minWingsVersion": "0.2.133",
   "icon": "icon.svg",
   "description": "A web browser in a tab, drawn by WebKit: an address bar that searches, history suggestions, cookies kept between runs (or not), sign-in copied from another browser on this Mac, and browser extensions, with Chromium as an engine you can download for Chrome extensions.",
   "api": 1,
@@ -493,7 +493,7 @@
       },
       {
         "name": "console",
-        "description": "Lists the Browser page's recent console messages and uncaught errors (up to the last 200 since it loaded), as level and text. Use it to see why a page misbehaves. Refused on sites the person signed in to by importing cookies.",
+        "description": "Lists the Browser page's recent console messages (up to the last 400 since it loaded), each with its level (error, warning, info, debug, log), text and source file:line:column, and uncaught exceptions with their stack. Use it to see why a page misbehaves. Refused on sites the person signed in to by importing cookies.",
         "inputSchema": {
           "type": "object",
           "properties": {}
@@ -501,10 +501,41 @@
       },
       {
         "name": "network",
-        "description": "Lists the Browser page's recent fetch and XMLHttpRequest calls since it loaded: method, URL and status. It can't see bodies or headers, the page's own loads (navigations, images, styles, scripts), service worker requests or web sockets. Refused on sites the person signed in to by importing cookies.",
+        "description": "Lists the Browser page's recent requests (the last 500 since it opened, of every kind: documents, scripts, images, fetch, XHR) with method, URL, type, status, MIME type, sizes, start time, duration, failure and initiator. Filter with url, status, type, since. With detail (a request's id from the list) it gives the request and response headers, and with body also the response text (1 MB at most). Authorization, Cookie and Set-Cookie values show as (hidden). Chromium engine only (WebKit answers that it needs it). A body is refused on a page with a password or card field. Refused on sites the person signed in to by importing cookies.",
         "inputSchema": {
           "type": "object",
-          "properties": {}
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Only requests whose address contains this."
+            },
+            "status": {
+              "type": "string",
+              "description": "A status class (2xx, 3xx, 4xx, 5xx), an exact status like 404, or failed."
+            },
+            "type": {
+              "type": "string",
+              "description": "A resource type: Document, Script, Stylesheet, Image, Font, XHR, Fetch, WebSocket, Other."
+            },
+            "since": {
+              "type": "number",
+              "description": "Only requests that began after this time, in milliseconds since 1970: use startedAt or now from an earlier answer."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "description": "The newest this many (default 100)."
+            },
+            "detail": {
+              "type": "string",
+              "description": "A request's id from the list: its request and response headers."
+            },
+            "body": {
+              "type": "boolean",
+              "description": "With detail: also the response body, if it is text of at most 1 MB."
+            }
+          }
         }
       },
       {
@@ -758,6 +789,6 @@
         }
       }
     ],
-    "mcpInstructions": "Browser (browser__*): the user's real browser in Wings. Each agent gets its own tab group, never the user's tabs. browser__open a url (new_tab; browser__tabs), browser__snapshot for refs, then click, fill, type, press, wait_for; screenshot to see. Also upload, screenshot_diff, recording, webmcp, downloads (files your tabs saved); demonstrate to have the user show a flow; handoff for sign-in. File paths: /tmp or $TMPDIR, or relative (saved in the Browser's folder)."
+    "mcpInstructions": "Browser (browser__*): the user's real browser in Wings. Each agent gets its own tab group, never the user's tabs. browser__open a url (new_tab; browser__tabs), browser__snapshot for refs, then click, fill, type, press (real input on Chromium), wait_for; screenshot to see. Also network (requests, headers, bodies), console, upload, screenshot_diff, recording, webmcp, downloads; demonstrate to have the user show a flow; handoff for sign-in. Paths: /tmp or $TMPDIR."
   }
 }

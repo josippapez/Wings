@@ -173,3 +173,64 @@ fn no_page_shortcut_takes_a_key_the_app_binds() {
         }
     });
 }
+
+/// A page that takes Cmd-T and Cmd-L for itself and says which it heard.
+fn claiming_page() -> String {
+    let mut heard = Vec::<String>::new();
+    fake::page("page", move |event| {
+        if let Some(("1:onShortcut", key)) = event {
+            heard.push(key["key"].as_str().unwrap_or_default().to_owned());
+        }
+        json!({ "id": 0, "type": "#root", "children": [{ "id": 1, "type": "Page",
+            "props": { "shortcuts": ["cmd-t", "cmd-l"], "onShortcut": "1:onShortcut" }, "children": [
+            { "id": 2, "type": "Slot", "props": { "name": "body" }, "children": [
+                { "id": 6, "type": "Text", "children": [{ "id": 7, "type": "#text", "text": format!("Heard {}.", heard.join(" ")) }] }] }] }] })
+    })
+}
+
+/// A page that names a key Wings binds (Cmd-T) gets it before Wings' own action, so it does not open a terminal tab; a key
+/// it doesn't name (Cmd-N, Cmd-D) still goes where it did; and with a terminal in front the page takes nothing.
+#[test]
+fn a_page_takes_the_keys_it_names_before_wings_acts_on_them_while_it_has_the_keyboard() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"] }]);
+    data.install_script("chatty", json!({ "contributes": { "views": views } }), &fake::idle("main"), &[("chat", &claiming_page())], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| assert!(w.open_plugin_view("chatty", "chat", None, window, cx)));
+    until_shows(&app, &mut window, "Heard .");
+    let tabs_before = window.read(|w, _| w.terminals.len());
+    window.simulate_keystroke("cmd-t");
+    until_shows(&app, &mut window, "Heard cmd-t.");
+    window.simulate_keystroke("cmd-l");
+    until_shows(&app, &mut window, "Heard cmd-t cmd-l.");
+    assert_eq!(window.read(|w, _| w.terminals.len()), tabs_before, "Cmd-T opened no terminal tab");
+    // With a terminal in front the page isn't asked, and Wings opens its tab as before.
+    window.update(|w, window, cx| {
+        let terminal = w.terminals[0].id;
+        w.show(Active::Terminal(terminal), window, cx);
+    });
+    window.draw();
+    window.simulate_keystroke("cmd-t");
+    stays(&app, &mut window, "Heard cmd-t cmd-l.");
+    assert_eq!(window.read(|w, _| w.terminals.len()), tabs_before + 1, "Wings opened its own tab");
+}
+
+/// A key pressed in the page's own web page is the page's even when Wings' keyboard is elsewhere, as after the browser tab
+/// whose field had it closed; a key from no web page still needs the page to have the keyboard.
+#[test]
+fn a_key_from_the_pages_web_page_reaches_it_wherever_wings_keyboard_was() {
+    let data = Data::temp();
+    let views = json!([{ "id": "chat", "title": "Chat", "page": "dist/chat.html", "opens": ["tab"] }]);
+    data.install_script("chatty", json!({ "contributes": { "views": views } }), &fake::idle("main"), &[("chat", &claiming_page())], "chatty-scope");
+    let (app, mut window) = open_plugins(&data, &Arc::default(), |_| {});
+    window.update(|w, window, cx| assert!(w.open_plugin_view("chatty", "chat", None, window, cx)));
+    until_shows(&app, &mut window, "Heard .");
+    window.update(|_, window, cx| window.blur(cx));
+    window.draw();
+    window.simulate_keystroke("cmd-l");
+    stays(&app, &mut window, "Heard .");
+    let page = window.read(|w, _| w.plugin_tabs[0].page.entity_id());
+    crate::web::key_from(page);
+    window.simulate_keystroke("cmd-l");
+    until_shows(&app, &mut window, "Heard cmd-l.");
+}

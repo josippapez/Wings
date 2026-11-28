@@ -19,7 +19,8 @@ use wings_plugin::{
     task::spawn,
     ui::{
         Choice, Combobox, ExtensionButton, Node, WebDownload, WebPopup, WebState, actions as dialog_actions, badge, bar, button, combobox_submit, dialog, icon, icon_button, icons, image, menu,
-        meter, muted, notice, page_with, row, section_label, slot, small, stack, tab as strip_tab, tab_group, text, toast, web_download, web_extension_action, web_view,
+        meter, muted, notice, page_with, row, section_label, slot, small, stack, tab as strip_tab, tab_group, text, text_input, title, toast, web_certificate, web_download, web_extension_action, web_find,
+        web_inspect, web_stop_find, web_view, web_zoom, WebFind,
     },
 };
 
@@ -305,15 +306,202 @@ fn clear_site(tab: String, url: String) {
 }
 
 fn site_menu(tab: &Tab) -> Option<Node> {
-    let name = site_name(&tab.state.url)?;
     let (asked, id) = (tab.state.url.clone(), tab.id.clone());
     let trigger = Node::new("Button").prop("variant", "ghost").prop("size", "icon-sm").prop("label", "More").prop("title", "More").child(wings_plugin::ui::icon(24, 2.0, &icons::ELLIPSIS).prop("size", 16));
-    let item = Node::new("Button").key("clear-site").on("onClick", move |_| with(|page| {
-        if let Some(tab) = page.tabs.get_mut(&id) {
-            tab.clearing_site = Some(asked.clone());
+    // WebKit is the fallback engine: its pages are inspected from Safari, which the app doesn't open for the person.
+    let inspect = (!tab.blank && tab.state.engine != "webkit").then(|| Node::new("Button").key("inspect").on("onClick", |_| inspect()).text("Inspect"));
+    let clear = site_name(&asked).map(|name| {
+        Node::new("Button").key("clear-site").on("onClick", move |_| with(|page| {
+            if let Some(tab) = page.tabs.get_mut(&id) {
+                tab.clearing_site = Some(asked.clone());
+            }
+        })).text(format!("Clear data for {name}"))
+    });
+    let items: Vec<Node> = inspect.into_iter().chain(clear).collect();
+    (!items.is_empty()).then(|| menu(trigger, items, true))
+}
+
+/// Sends the shown tab's view a command of the person's own (find, zoom, a certificate choice, the inspector): the view
+/// refuses one it can't do, as WebKit does, in the page's red line.
+fn person_command(make: impl FnOnce(u64) -> Value) {
+    with(|page| {
+        page.problem = None;
+        let id = page.active_id();
+        if page.tabs.get(&id).is_some_and(|tab| tab.blank) {
+            return;
         }
-    })).text(format!("Clear data for {name}"));
-    Some(menu(trigger, [item], true))
+        let token = page.tabs.run(&id, make);
+        page.tabs.active_mut().opening = token;
+    });
+}
+
+/// Opens the engine's inspector for the shown page (Cmd-Opt-I).
+fn inspect() {
+    if with(|page| page.active().state.engine != "webkit") {
+        person_command(web_inspect);
+    }
+}
+
+/// The certificate notice's two buttons: open the site anyway, or give the load up and go back when there is a page to go back to.
+fn certificate_choice(proceed: bool) {
+    person_command(|token| web_certificate(proceed, token));
+    if !proceed && with(|page| page.active().state.can_go_back) {
+        command("back");
+    }
+}
+
+/// The page's zoom, from Cmd-+, Cmd-- and Cmd-0 (`bigger`, `smaller`, `reset`) or the zoom button.
+fn zoom(step: &str) {
+    let step = match step {
+        "bigger" => "in",
+        "smaller" => "out",
+        _ => "reset",
+    };
+    person_command(|token| web_zoom(step, token));
+}
+
+/// What the find bar says of the search: "2 of 5", "Found" where the engine can't count, "No matches", nothing before one.
+fn find_label(text: &str, found: Option<WebFind>) -> String {
+    match (text.is_empty(), found) {
+        (true, _) | (_, None) => String::new(),
+        (false, Some(WebFind { matches: Some(0), .. })) | (false, Some(WebFind { matches: None, found: false, .. })) => "No matches".into(),
+        (false, Some(WebFind { matches: Some(count), current, .. })) => format!("{} of {count}", current.max(1)),
+        (false, Some(WebFind { matches: None, .. })) => "Found".into(),
+    }
+}
+
+/// Searches the shown page for what is typed in the find bar, from the first match; an empty bar ends the search.
+fn find_typed(text: String) {
+    with(|page| page.tabs.active_mut().find = Some(text.clone()));
+    if text.is_empty() {
+        person_command(web_stop_find);
+    } else {
+        person_command(|token| web_find(&text, true, false, token));
+    }
+}
+
+/// The next (or previous) match of what the find bar holds.
+fn find_step(forward: bool) {
+    if let Some(text) = with(|page| page.active().find.clone()).filter(|text| !text.is_empty()) {
+        person_command(|token| web_find(&text, forward, true, token));
+    }
+}
+
+/// Opens the find bar under the toolbar (Cmd-F) and gives it the keyboard, again when it is open already.
+fn open_find() {
+    with(|page| {
+        let tab = page.tabs.active_mut();
+        if !tab.blank {
+            tab.find.get_or_insert_with(String::new);
+            tab.find_focus += 1;
+        }
+    });
+}
+
+fn close_find() {
+    if with(|page| page.tabs.active_mut().find.take().is_some()) {
+        person_command(web_stop_find);
+    }
+}
+
+/// The address field takes the keyboard (Cmd-L): a new field, which focuses as it appears.
+fn focus_address() {
+    with(|page| page.tabs.active_mut().address_focus += 1);
+}
+
+/// Cmd-W: the shown browser tab closes, and the Wings tab with the last one.
+fn close_shown() {
+    let (id, last) = with(|page| (page.active_id(), page.tabs.list.len() <= 1));
+    if last {
+        drop(host::close_tab());
+    } else {
+        close_tab(&id);
+    }
+}
+
+fn reopen_tab() {
+    if with(|page| page.tabs.reopen()).is_some() {
+        tabs_changed();
+    }
+}
+
+/// The keys the page takes while it has the keyboard, in its toolbar or in a Chromium page: Wings binds most of them for its own
+/// tabs, which the page gets first.
+/// The zoom keys are among them: `onTextScale` hears them only while Wings' part of the page has the keyboard, not the web page.
+const SHORTCUTS: [&str; 15] =
+    ["cmd-t", "cmd-w", "cmd-shift-t", "cmd-l", "cmd-r", "cmd-[", "cmd-]", "cmd-f", "cmd-g", "cmd-shift-g", "cmd-alt-i", "cmd-=", "cmd-shift-=", "cmd--", "cmd-0"];
+
+fn shortcut(key: &str) {
+    match key {
+        "cmd-t" => {
+            new_tab();
+            focus_address();
+        }
+        "cmd-w" => close_shown(),
+        "cmd-shift-t" => reopen_tab(),
+        "cmd-l" => focus_address(),
+        "cmd-r" => command("reload"),
+        "cmd-[" => command("back"),
+        "cmd-]" => command("forward"),
+        "cmd-f" => open_find(),
+        "cmd-g" => find_step(true),
+        "cmd-shift-g" => find_step(false),
+        "cmd-alt-i" => inspect(),
+        "cmd-=" | "cmd-shift-=" => zoom("bigger"),
+        "cmd--" => zoom("smaller"),
+        "cmd-0" => zoom("reset"),
+        _ => {}
+    }
+}
+
+/// The find bar under the toolbar: the text, "n of m", previous, next and close.
+fn find_bar(tab: &Tab) -> Option<Node> {
+    let text = tab.find.as_deref()?;
+    let field = text_input("Find in page", text, find_typed)
+        .prop("placeholder", "Find in page")
+        .prop("autoFocus", true)
+        .prop("submitOnEnter", true)
+        .on("onKeyDown", |event| match event["key"].as_str() {
+            Some("Enter") => find_step(event["shiftKey"] != true),
+            Some("Escape") => close_find(),
+            _ => {}
+        })
+        .key(format!("find-{}", tab.find_focus));
+    let bar = row()
+        .prop("grow", true)
+        .prop("gap", "m")
+        .prop("align", "center")
+        .child(stack().prop("grow", true).child(field))
+        .child(muted(find_label(text, tab.state.find)).prop("size", "small"))
+        .child(icon_button("Previous match", &icons::CHEVRON_UP, || find_step(false)))
+        .child(icon_button("Next match", &icons::CHEVRON_DOWN, || find_step(true)))
+        .child(icon_button("Close find", &icons::CLOSE, close_find));
+    Some(Node::new("Toolbar").key("find-bar").child(slot("children", bar)))
+}
+
+/// A notice under the toolbar, in a bar of its own so it keeps the toolbar's padding instead of touching the page's edges.
+fn inset(key: &str, notice: Node) -> Node {
+    Node::new("Toolbar").key(key).child(slot("children", stack().prop("grow", true).child(notice)))
+}
+
+/// What the person has to choose when the site's certificate isn't valid: a notice that names the site and the reason, with
+/// Go back and "Proceed to <site> (unsafe)". Never chosen for them: only these two buttons send the choice.
+fn certificate_notice(site: &str, reason: &str) -> Node {
+    Node::new("Notice")
+        .prop("tone", "danger")
+        .child(
+            stack()
+                .prop("gap", "s")
+                .child(title(format!("The connection to {site} isn't private")))
+                .child(text(reason))
+                .child(
+                    row()
+                        .prop("gap", "s")
+                        .prop("align", "center")
+                        .child(button("Go back", "secondary", false, || certificate_choice(false)))
+                        .child(button(format!("Proceed to {site} (unsafe)"), "destructive", false, || certificate_choice(true))),
+                ),
+        )
 }
 
 fn clear_site_dialog(tab: &Tab, url: &str) -> Node {
@@ -626,6 +814,7 @@ fn extension_button(extension: &ExtensionButton) -> Node {
 }
 
 fn address(tab: &Tab) -> Node {
+    let focus = tab.address_focus;
     let options = tab
         .typed
         .as_deref()
@@ -647,9 +836,9 @@ fn address(tab: &Tab) -> Node {
         options,
         // Only while something is typed: after Enter, or with the page's own address in the field, there is nothing to submit.
         empty: if tab.typed.is_some() { "Press Enter to search or go" } else { "" },
-        auto_focus: false,
+        auto_focus: focus > 0,
     };
-    combobox_submit(
+    let field = combobox_submit(
         field,
         |text| {
             if let Some(text) = text {
@@ -665,7 +854,9 @@ fn address(tab: &Tab) -> Node {
             "Escape" => with(|page| page.tabs.active_mut().typed = None),
             _ => {}
         },
-    )
+    );
+    // A new field for each Cmd-L, which takes the keyboard as it appears.
+    if focus > 0 { field.key(format!("address-{focus}")) } else { field }
 }
 
 /// What the start page shows now, and a look at the ports again: a server started since the tab opened comes in.
@@ -759,15 +950,19 @@ fn view() -> Vec<Node> {
             } else {
                 icon_button("Pop out into a window", &icons::EXTERNAL_LINK, agent_page::pop_button_action)
             })
+            .maybe((state.zoom != 100 && state.zoom != 0 && !tab.blank).then(|| Node::new("Button").key("zoom").prop("variant", "ghost").prop("size", "sm").prop("label", format!("{}%", state.zoom)).prop("title", "Reset zoom").on("onClick", |_| zoom("reset")).text(format!("{}%", state.zoom))))
             .maybe(site_menu(tab))
             .child(icon_button("Browser settings", &icons::SETTINGS, || drop(host::open_settings())));
         let problem = if tab.staged.is_none() { page.problem.as_deref() } else { None };
         let top = [
             Some(tab_strip(&page)),
             Some(Node::new("Toolbar").child(slot("children", nav)).child(slot("actions", actions))),
-            state.error.as_deref().map(|error| notice("danger", error).key("error")),
-            problem.map(|problem| notice("danger", problem).key("problem")),
-            tab.added.as_deref().map(|added| notice("success", added).key("added")),
+            state.certificate.as_ref().map(|(site, reason)| inset("certificate", certificate_notice(site, reason))),
+            state.auth.as_deref().map(|site| inset("auth", notice("info", format!("{site} asks for a name and a password: answer in the sheet over this window.")))),
+            state.error.as_deref().filter(|_| state.certificate.is_none()).map(|error| inset("error", notice("danger", error))),
+            find_bar(tab),
+            problem.map(|problem| inset("problem", notice("danger", problem))),
+            tab.added.as_deref().map(|added| inset("added", notice("success", added))),
             agent_page::handoff_banner(),
         ];
         let cleared = page.cleared.as_ref().map(|(tone, words)| toast(tone, words.as_str(), || with(|page| page.cleared = None)).key("cleared"));
@@ -780,11 +975,11 @@ fn view() -> Vec<Node> {
             let servers = start_page::servers(&page.ports, &page.panes, &page.project);
             let recent = start_page::recent(&page.visited, &servers, RECENT);
             let body = start_page::view(&servers, &recent, open_from_start);
-            return vec![page_with(top.into_iter().flatten(), std::iter::once(body).chain(webs).chain(list)).prop("column", START_COLUMN).toasts(toasts)];
+            return vec![page_with(top.into_iter().flatten(), std::iter::once(body).chain(webs).chain(list)).prop("column", START_COLUMN).toasts(toasts).shortcuts(&SHORTCUTS, shortcut).on_text_scale(zoom)];
         }
         let dialog = tab.staged.as_ref().map(|staged| dialog_for(staged, page.busy, page.problem.as_deref(), cancel, add));
         let ask = tab.clearing_site.as_deref().map(|url| clear_site_dialog(tab, url));
-        vec![page_with(top.into_iter().flatten(), webs.chain(list).chain(dialog).chain(ask)).toasts(toasts)]
+        vec![page_with(top.into_iter().flatten(), webs.chain(list).chain(dialog).chain(ask)).toasts(toasts).shortcuts(&SHORTCUTS, shortcut).on_text_scale(zoom)]
     })
 }
 
@@ -1074,6 +1269,170 @@ mod tests {
         let mut found = Vec::new();
         all(tree, "WebView", &mut found);
         found
+    }
+
+    /// The button whose text is `words`: `ui::button` puts its label in a text child.
+    fn button_saying<'a>(tree: &'a Value, words: &str) -> Option<&'a Value> {
+        if tree["type"] == "Button" && tree["children"].as_array().is_some_and(|kids| kids.iter().any(|kid| kid["text"] == words)) {
+            return Some(tree);
+        }
+        let children = tree.as_array().or_else(|| tree["children"].as_array())?;
+        children.iter().find_map(|child| button_saying(child, words))
+    }
+
+    fn last_command() -> Option<Value> {
+        shown(|tab| tab.commands.last().cloned())
+    }
+
+    #[test]
+    fn the_page_takes_the_browser_keys_and_each_does_what_a_browser_does() {
+        only(Some("https://a.com/"));
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let page = &tree[0]["props"];
+        assert_eq!(page["shortcuts"], serde_json::json!(SHORTCUTS), "the page names its keys");
+        let take = |key: &str| assert!(handlers.call(page["onShortcut"].as_str().unwrap(), &serde_json::json!({ "key": key })));
+        take("cmd-r");
+        assert_eq!(last_command().unwrap()["action"], "reload");
+        take("cmd-[");
+        assert_eq!(last_command().unwrap()["action"], "back");
+        take("cmd-]");
+        assert_eq!(last_command().unwrap()["action"], "forward");
+        // Cmd-T is a browser tab with the address field asked for the keyboard, not a terminal.
+        take("cmd-t");
+        assert_eq!(with(|page| (page.tabs.list.len(), page.active().blank, page.active().address_focus)), (2, true, 1));
+        assert!(drawn().contains("\"autoFocus\":true"), "the address field asks for the keyboard");
+        // Cmd-W closes the tab; Cmd-Shift-T brings it back at its address.
+        take("cmd-w");
+        assert_eq!(with(|page| page.tabs.list.len()), 1);
+        take("cmd-t");
+        with(|page| page.tabs.send("t3", "load", Some("https://b.com/")));
+        take("cmd-w");
+        take("cmd-shift-t");
+        assert_eq!(shown(|tab| tab.url().to_owned()), "https://b.com/");
+        take("cmd-l");
+        assert_eq!(shown(|tab| tab.address_focus), 1);
+        // Its address is selected as it takes the keyboard, so what is typed replaces it.
+        assert!(drawn().contains("\"selectOnFocus\":true"), "the address field selects its text");
+    }
+
+    #[test]
+    fn cmd_w_closes_the_browser_tab_and_only_the_last_one_asks_for_the_wings_tab_to_close() {
+        only(Some("https://a.com/"));
+        new_tab();
+        close_shown();
+        assert_eq!(with(|page| page.tabs.list.len()), 1, "one of two tabs closes and the Wings tab stays");
+        let asked = std::rc::Rc::new(RefCell::new(Vec::<String>::new()));
+        let seen = asked.clone();
+        host::testing::answer(move |method, _| {
+            seen.borrow_mut().push(method.to_owned());
+            Ok(Value::Null)
+        });
+        close_shown();
+        assert_eq!(*asked.borrow(), ["closeTab"], "the last tab closes the Wings tab");
+    }
+
+    #[test]
+    fn cmd_f_opens_a_find_bar_that_searches_steps_counts_and_closes() {
+        only(Some("https://a.com/"));
+        shortcut("cmd-f");
+        assert_eq!(shown(|tab| tab.find.clone()), Some(String::new()));
+        assert!(drawn().contains("Find in page"));
+        find_typed("cat".into());
+        assert_eq!(last_command().unwrap(), wings_plugin::ui::web_find("cat", true, false, 1));
+        with(|page| page.tabs.active_mut().state.find = Some(WebFind { matches: Some(5), current: 2, found: true }));
+        assert!(drawn().contains("2 of 5"));
+        shortcut("cmd-g");
+        assert_eq!(last_command().unwrap(), wings_plugin::ui::web_find("cat", true, true, 2));
+        shortcut("cmd-shift-g");
+        assert_eq!(last_command().unwrap(), wings_plugin::ui::web_find("cat", false, true, 3));
+        close_find();
+        assert_eq!(last_command().unwrap()["action"], "stopFind");
+        assert_eq!(shown(|tab| tab.find.clone()), None);
+        assert!(!drawn().contains("Find in page"));
+        // A blank tab has nothing to search.
+        new_tab();
+        shortcut("cmd-f");
+        assert_eq!(shown(|tab| tab.find.clone()), None);
+    }
+
+    /// The zoom keys zoom the page from wherever the keyboard is in it, the web page too, as `onTextScale` doesn't hear them there.
+    #[test]
+    fn the_zoom_keys_zoom_the_page() {
+        only(Some("https://a.com/"));
+        for (key, step) in [("cmd-=", "in"), ("cmd-shift-=", "in"), ("cmd--", "out"), ("cmd-0", "reset")] {
+            shortcut(key);
+            assert_eq!(last_command().unwrap()["do"], step, "{key}");
+        }
+    }
+
+    #[test]
+    fn the_find_bar_says_n_of_m_found_or_no_matches() {
+        let found = |matches, current, found| Some(WebFind { matches, current, found });
+        assert_eq!(find_label("cat", found(Some(5), 2, true)), "2 of 5");
+        assert_eq!(find_label("cat", found(Some(0), 0, false)), "No matches");
+        assert_eq!(find_label("cat", found(None, 0, true)), "Found", "an engine that can't count");
+        assert_eq!(find_label("cat", found(None, 0, false)), "No matches");
+        assert_eq!(find_label("", found(Some(5), 2, true)), "", "nothing typed");
+        assert_eq!(find_label("cat", None), "", "no answer yet");
+    }
+
+    #[test]
+    fn the_font_keys_zoom_the_page_and_a_zoomed_page_shows_its_level_with_a_reset() {
+        only(Some("https://a.com/"));
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let scale = |step: &str| assert!(handlers.call(tree[0]["props"]["onTextScale"].as_str().unwrap(), &serde_json::json!({ "step": step })));
+        for (step, wanted) in [("bigger", "in"), ("smaller", "out"), ("reset", "reset")] {
+            scale(step);
+            assert_eq!(last_command().unwrap()["do"], wanted, "{step}");
+        }
+        assert!(button_named(&wings_plugin::ui::export(view()).0, "110%").is_none(), "no level at 100%");
+        with(|page| page.tabs.active_mut().state.zoom = 110);
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let level = button_named(&tree, "110%").expect("the level");
+        assert!(handlers.call(level["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        assert_eq!(last_command().unwrap()["do"], "reset");
+    }
+
+    #[test]
+    fn a_certificate_the_engine_refused_is_a_notice_with_go_back_and_proceed_that_send_the_persons_choice() {
+        only(Some("https://localhost:8443/"));
+        with(|page| {
+            let tab = page.tabs.active_mut();
+            tab.state.error = Some("The site's certificate isn't valid".into());
+            tab.state.certificate = Some(("localhost:8443".into(), "self-signed".into()));
+            tab.state.can_go_back = true;
+        });
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let shown_text = tree.to_string();
+        assert!(shown_text.contains("localhost:8443") && shown_text.contains("self-signed"), "{shown_text}");
+        assert!(!shown_text.contains("The site's certificate isn't valid"), "the notice replaces the error line");
+        let proceed = button_saying(&tree, "Proceed to localhost:8443 (unsafe)").expect("proceed names the site");
+        assert!(handlers.call(proceed["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        assert_eq!(last_command().unwrap(), wings_plugin::ui::web_certificate(true, 1));
+        let back = button_saying(&tree, "Go back").expect("go back");
+        assert!(handlers.call(back["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        let sent = shown(|tab| tab.commands.iter().map(|command| command["action"].as_str().unwrap_or_default().to_owned()).collect::<Vec<_>>());
+        assert_eq!(&sent[sent.len() - 2..], ["certificate", "back"], "giving up goes back to where there was a page");
+        // Nothing but the notice's buttons sends it: no shortcut or other control does.
+        assert!(!SHORTCUTS.iter().any(|key| { shortcut(key); last_command().is_some_and(|c| c["action"] == "certificate" && c["proceed"] == true && c["token"].as_u64() > Some(3)) }));
+    }
+
+    #[test]
+    fn a_password_sheet_waiting_says_so_and_inspect_is_in_the_more_menu_for_chromium_only() {
+        only(Some("https://intranet.test/"));
+        with(|page| page.tabs.active_mut().state.auth = Some("intranet.test".into()));
+        assert!(drawn().contains("intranet.test asks for a name and a password"));
+        with(|page| page.tabs.active_mut().state = WebState { engine: "chromium".into(), ..loaded("https://a.com/", "") });
+        let now = drawn();
+        assert!(now.contains("Inspect") && now.contains("Clear data for a.com"), "{now}");
+        let (tree, handlers) = wings_plugin::ui::export(view());
+        let mut items = Vec::new();
+        all(&tree, "Button", &mut items);
+        let item = items.into_iter().find(|item| item["children"].to_string().contains("Inspect")).expect("the item");
+        assert!(handlers.call(item["props"]["onClick"].as_str().unwrap(), &Value::Null));
+        assert_eq!(last_command().unwrap()["action"], "inspect");
+        with(|page| page.tabs.active_mut().state.engine = "webkit".into());
+        assert!(!drawn().contains("Inspect"), "WebKit's inspector is Safari's");
     }
 
     #[test]

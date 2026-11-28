@@ -3,6 +3,10 @@
 //! script in the page's own world only where the guard lets it, a picture has the secret fields painted over, and the
 //! logs are the main frame's console and requests, never a site's signed in with imported cookies.
 //!
+//! Real input (`input`) and the page's requests (`network`, kept by `net` from the moment the page lives) are read and
+//! acted on under the same rules as a script: not on a site signed in with imported cookies, and no input or response body
+//! on a page that shows a secret field.
+//!
 //! The guard's watch runs in Wings' own world of every frame as it starts (`Page.addScriptToEvaluateOnNewDocument`),
 //! the frames of other sites too, each in a process of its own that the page's session attaches to before it runs
 //! (`Target.setAutoAttach`), and tells a binding only that world has (`Runtime.addBinding` by its name). Each script
@@ -21,13 +25,14 @@ use serde_json::{Value, json};
 
 use super::{
     devtools::{Channel, Incoming},
+    input, net,
     page::{Shared, weak_of},
 };
 use crate::{
-    page::tree::{WebFile, WebRecord},
+    page::tree::{WebFile, WebInput, WebNetwork, WebRecord},
     web::{
         diff, guard::{self, FUNCTIONS, WATCH_FUNCTION, WORLD},
-        mac::{LOGS, LOGS_KEPT, MOVED_ON},
+        mac::{LOGS_KEPT, MOVED_ON},
         policy::{self, Files},
         record::Recording,
         views::Heard,
@@ -38,7 +43,6 @@ use crate::{
 pub const PLUGIN_WORLD: &str = "wings-plugin";
 /// The bindings Wings' world and the page's tell.
 const GUARD_BINDING: &str = "wingsGuard";
-const LOG_BINDING: &str = "wingsLog";
 
 /// What a script returned that isn't JSON, as WebKit says it (`mac::json_of`).
 const NOT_JSON: &str = "The script returned something that isn't JSON: return plain values, arrays and objects";
@@ -52,8 +56,10 @@ pub struct Agent {
     contexts: RefCell<Contexts>,
     /// The secret fields its documents showed, by `Contexts::doc`.
     seen: guard::Seen,
-    /// The main frame's recent console lines and requests (`mac::LOGS`), the newest last.
+    /// The main frame's recent console lines and uncaught exceptions (`net::console_line`), the newest last.
     logs: RefCell<VecDeque<Value>>,
+    /// Its recent requests, which a thread of their own fills (`net::feed`).
+    net: net::Log,
     /// The page's recording, running or ended and not yet asked about (`record`).
     recording: RefCell<Option<Recording>>,
     /// Its frames waiting for a check of the page that began after them (`Held`).
@@ -256,14 +262,6 @@ pub fn watch() -> String {
     )
 }
 
-/// What the main frame runs in the page's own world as it starts: WebKit's log script, posting to the binding. A frame in
-/// the page runs none, as in WebKit.
-pub fn log_script() -> String {
-    format!(
-        "(() => {{\nif (window.top !== window) return;\nconst webkit = {{ messageHandlers: {{ {LOG_BINDING}: {{ postMessage: (m) => globalThis.{LOG_BINDING}(JSON.stringify(m)) }} }} }};\n{LOGS}\n}})();"
-    )
-}
-
 /// What readies a page's session, in order, before it loads anything: the main frame's id first, so the contexts that
 /// come next are known by it. Chromium runs a new document's scripts in the page's own world only for a session that
 /// enabled `Page` (measured in 156: the log script never ran without it).
@@ -272,11 +270,11 @@ pub fn setup() -> Vec<(&'static str, Value)> {
         ("Page.getFrameTree", json!({})),
         ("Page.enable", json!({})),
         ("Runtime.enable", json!({})),
+        // On for as long as the page lives, with the bodies it keeps for `Network.getResponseBody` bounded.
+        ("Network.enable", json!({ "maxTotalBufferSize": net::BUFFER_TOTAL, "maxResourceBufferSize": net::BUFFER_ONE })),
         ("Runtime.addBinding", json!({ "name": GUARD_BINDING, "executionContextName": WORLD })),
-        ("Runtime.addBinding", json!({ "name": LOG_BINDING })),
         ("Page.addScriptToEvaluateOnNewDocument", json!({ "source": watch(), "worldName": WORLD, "runImmediately": true })),
         ("Page.addScriptToEvaluateOnNewDocument", json!({ "source": format!("//# sourceURL={PLUGIN_WORLD}"), "worldName": PLUGIN_WORLD, "runImmediately": true })),
-        ("Page.addScriptToEvaluateOnNewDocument", json!({ "source": log_script(), "runImmediately": true })),
         ("Target.setAutoAttach", auto_attach()),
     ]
 }
@@ -342,25 +340,6 @@ fn exception_text(details: &Value) -> String {
     details["text"].as_str().unwrap_or("The script threw").to_owned()
 }
 
-/// One line the log script posted, in WebKit's shape (`mac::Observer::heard`), or none for what isn't one.
-pub fn log_line(payload: &str) -> Option<Value> {
-    let body: Value = serde_json::from_str(payload).ok()?;
-    let text = |key: &str| body[key].as_str().map(str::to_owned);
-    let number = |key: &str| body[key].as_i64();
-    match body["kind"].as_str()? {
-        "console" => Some(json!({ "kind": "console", "level": text("level"), "text": text("text") })),
-        "network" => Some(json!({ "kind": "network", "method": text("method"), "url": text("url"), "status": number("status"), "error": text("error") })),
-        _ => None,
-    }
-}
-
-/// The host of a context's origin (`https://host:port`), empty for one with none.
-fn host_of(origin: &str) -> String {
-    crate::web::origin(origin)
-        .and_then(|origin| origin.split_once("://").map(|(_, host)| host.split(':').next().unwrap_or_default().to_owned()))
-        .unwrap_or_default()
-}
-
 /// Opens `page`'s channel on `browser` and readies it (`setup`); `done` hears whether all of it took.
 pub fn open(page: &Shared, browser: &cef::Browser, done: impl FnOnce(Result<(), String>) + 'static) {
     let Some(channel) = Channel::open(browser, weak_of(page)) else { return done(Err("Chromium's DevTools didn't open".into())) };
@@ -421,6 +400,8 @@ pub fn heard(page: &Shared, incoming: Incoming) {
             }
             "Runtime.executionContextsCleared" => page.agent.contexts.borrow_mut().cleared(session),
             "Runtime.bindingCalled" => bound(page, session, &params),
+            "Runtime.consoleAPICalled" => console(page, session, &params, net::console_line),
+            "Runtime.exceptionThrown" => console(page, session, &params, net::exception_line),
             "Page.screencastFrame" => screencast_frame(page, session, &params),
             // On a turn of its own: Chromium tells of a frame waiting to start before it can hear that it may, so a
             // `Runtime.runIfWaitingForDebugger` sent while it tells is lost and the frame never loads (measured in 156).
@@ -442,7 +423,7 @@ pub fn heard(page: &Shared, incoming: Incoming) {
     }
 }
 
-/// A binding was called: the watch in a frame saw a secret field, or the main frame's log script posted a line.
+/// A binding was called: the watch in a frame saw a secret field.
 fn bound(page: &Shared, session: Option<&str>, params: &Value) {
     let (Some(name), Some(id)) = (params["name"].as_str(), params["executionContextId"].as_i64()) else { return };
     let contexts = page.agent.contexts.borrow();
@@ -459,23 +440,36 @@ fn bound(page: &Shared, session: Option<&str>, params: &Value) {
                 recording.end(RECORDING_SECRET);
             }
         }
-        // The page's own world of its main frame only, and nothing from a site signed in with imported cookies or a
-        // context with no host of its own.
-        LOG_BINDING => {
-            let Some(context) = context.filter(|context| context.default && contexts.is_main(session, &context.frame)) else { return };
-            drop(contexts);
-            if crate::web::holds_imported_host(&page.web_dir, &host_of(&context.origin)) {
-                return;
-            }
-            let Some(line) = params["payload"].as_str().and_then(log_line) else { return };
-            let mut logs = page.agent.logs.borrow_mut();
-            logs.push_back(line);
-            while logs.len() > LOGS_KEPT * 2 {
-                logs.pop_front();
-            }
-        }
         _ => {}
     }
+}
+
+/// A console call or an uncaught exception of the page's main frame, in its own world, kept as `line` makes it. Nothing of a
+/// frame of another site, a world of Wings or an extension, which have no say here; what is read goes through `gate`, which
+/// refuses a site signed in with imported cookies, and a new document starts the lines again (`clear_logs`).
+fn console(page: &Shared, session: Option<&str>, params: &Value, line: fn(&Value) -> Value) {
+    if session.is_some() {
+        return;
+    }
+    let id = params["executionContextId"].as_i64().or_else(|| params["exceptionDetails"]["executionContextId"].as_i64());
+    if let Some(id) = id {
+        let contexts = page.agent.contexts.borrow();
+        if !contexts.get(None, id).is_some_and(|context| context.default && contexts.is_main(None, &context.frame)) {
+            return;
+        }
+    }
+    // Every value the page's requests showed to be a credential is out of its console too.
+    let line = page.agent.net.lock().unwrap_or_else(std::sync::PoisonError::into_inner).console(line(params));
+    let mut logs = page.agent.logs.borrow_mut();
+    logs.push_back(line);
+    while logs.len() > LOGS_KEPT * 2 {
+        logs.pop_front();
+    }
+}
+
+/// Hands a `Network` event's bytes to the thread that reads them (`net::feed`), off the main thread.
+pub fn feed_net(page: &Shared, message: &[u8]) {
+    net::feed(&page.agent.net, message);
 }
 
 /// A frame of another site, in a process of its own, waits to start: it gets the watch first. One that couldn't be
@@ -925,14 +919,110 @@ fn check_held(page: &Shared) {
 
 const RECORDING_IMPORTED: &str = "the page is signed in with cookies you imported";
 
+/// Whether `host` is of a site signed in with imported cookies, asked once for each host.
+fn hider(page: &Shared) -> impl Fn(&str) -> bool + '_ {
+    let known: RefCell<HashMap<String, bool>> = RefCell::default();
+    move |host: &str| *known.borrow_mut().entry(host.to_owned()).or_insert_with(|| crate::web::holds_imported_host(&page.web_dir, host))
+}
+
 /// The main frame's recent console messages and requests, as WebKit answers `logs`.
 pub fn logs(page: &Shared) -> Result<Value, String> {
     if page.agent.channel().is_none() {
         return Err(guard::UNCHECKED.into());
     }
-    let logs = page.agent.logs.borrow();
-    let of = |kind: &str| logs.iter().filter(|line| line["kind"] == kind).cloned().collect::<Vec<_>>();
-    Ok(json!({ "console": of("console"), "network": of("network") }))
+    let net = page.agent.net.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Scrubbed again as it is read: a credential learned after a line was kept (a response body read since) is out too.
+    let console: Vec<Value> = page.agent.logs.borrow().iter().map(|line| net.console(line.clone())).collect();
+    let network = net.legacy(&hider(page), LOGS_KEPT);
+    Ok(json!({ "console": console, "network": network }))
+}
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |since| since.as_millis() as f64)
+}
+
+/// The page's requests: a list, or with `detail` one request's headers and, with `body`, its response body, which a page
+/// that shows a secret field never gives (checked as a script's run is) and only for a text type up to 1 MB.
+pub fn network(page: &Shared, wanted: &WebNetwork, token: u64) {
+    let told = page.told.clone();
+    let tell = move |result| told.tell(Heard::Result { token, result });
+    let Some(channel) = page.agent.channel() else { return tell(Err(guard::UNCHECKED.into())) };
+    let hide = hider(page);
+    let log = page.agent.net.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(id) = wanted.detail.as_deref() else { return tell(Ok(log.list(wanted, &hide, now_ms()))) };
+    let Some((request, mut shown)) = log.detail(id, &hide) else { return tell(Err(format!("No request with the id {id}: network lists them."))) };
+    drop(log);
+    if !wanted.body {
+        return tell(Ok(shown));
+    }
+    if let Some(why) = net::body_refusal(&request) {
+        return tell(Err(why.into()));
+    }
+    let (generation, weak) = (page.generation.get(), weak_of(page));
+    let (doc, wings) = {
+        let contexts = page.agent.contexts.borrow();
+        (contexts.doc(), contexts.of_main(Some(WORLD)).map(|context| context.unique.clone()))
+    };
+    let Some(wings) = wings else { return tell(Err(crate::web::LOADING.into())) };
+    let (started, asked) = (Instant::now(), channel.clone());
+    channel.ask(None, "Runtime.evaluate", evaluate(&check(), &wings), move |found| {
+        let Some(page) = weak.upgrade() else { return };
+        let found = value_of(found);
+        if found.as_ref().is_ok_and(|found| found["secret"] == true) {
+            page.agent.seen.note(doc, false);
+        }
+        let allowed = if moved(&page, generation, doc) { Err(MOVED_ON) } else { guard::may_run(&found, started.elapsed(), page.agent.seen.secret(doc)) };
+        if let Err(why) = allowed {
+            return tell(Err(why.into()));
+        }
+        let weak = weak_of(&page);
+        asked.ask(None, "Network.getResponseBody", json!({ "requestId": request.id }), move |answer| {
+            let body = answer.map_err(net::body_lost).and_then(|answer| net::body_text(&answer).map_err(str::to_owned));
+            let Some(page) = weak.upgrade() else { return };
+            // Its credential fields are scrubbed, by the type the response said, before it leaves.
+            tell(body.map(|body| {
+                shown["body"] = json!(page.agent.net.lock().unwrap_or_else(std::sync::PoisonError::into_inner).protect_body(&body, &request.mime));
+                shown
+            }));
+        });
+    });
+}
+
+/// Sends `requests` one after another, each once the one before was answered, and `done` hears how it went.
+fn in_order(channel: Rc<Channel>, mut requests: VecDeque<(&'static str, Value)>, done: Box<dyn FnOnce(Result<(), String>)>) {
+    let Some((method, params)) = requests.pop_front() else { return done(Ok(())) };
+    let next = channel.clone();
+    channel.ask(None, method, params, move |answer| match answer {
+        Ok(_) => in_order(next, requests, done),
+        Err(why) => done(Err(why)),
+    });
+}
+
+/// Real mouse and keyboard input (`input`), once the page is checked for a password, card or one-time code field as a
+/// script in the page's own world is: trusted events could fill and submit one.
+pub fn input(page: &Shared, events: &[WebInput], token: u64) {
+    let told = page.told.clone();
+    let tell = move |result| told.tell(Heard::Result { token, result });
+    let Some(channel) = page.agent.channel() else { return tell(Err(guard::UNCHECKED.into())) };
+    let (generation, weak) = (page.generation.get(), weak_of(page));
+    let (doc, wings) = {
+        let contexts = page.agent.contexts.borrow();
+        (contexts.doc(), contexts.of_main(Some(WORLD)).map(|context| context.unique.clone()))
+    };
+    let Some(wings) = wings else { return tell(Err(crate::web::LOADING.into())) };
+    let (requests, count, started, asked) = (input::requests(events).into_iter().collect::<VecDeque<_>>(), events.len(), Instant::now(), channel.clone());
+    channel.ask(None, "Runtime.evaluate", evaluate(&check(), &wings), move |found| {
+        let Some(page) = weak.upgrade() else { return };
+        let found = value_of(found);
+        if found.as_ref().is_ok_and(|found| found["secret"] == true) {
+            page.agent.seen.note(doc, false);
+        }
+        let allowed = if moved(&page, generation, doc) { Err(MOVED_ON) } else { guard::may_run(&found, started.elapsed(), page.agent.seen.secret(doc)) };
+        if let Err(why) = allowed {
+            return tell(Err(why.into()));
+        }
+        in_order(asked, requests, Box::new(move |done| tell(done.map(|()| json!({ "events": count })))));
+    });
 }
 
 #[cfg(test)]
@@ -1001,8 +1091,10 @@ mod tests {
         assert_eq!(frame, ["Page.enable", "Runtime.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument", "Target.setAutoAttach"]);
         assert!(steps.iter().any(|(method, _)| *method == "Page.enable"), "a new document's scripts run in its own world only then");
         assert!(frame_setup().iter().any(|(_, params)| params["source"].as_str() == Some(watch().as_str()) && params["worldName"] == WORLD));
-        // The log script names only the page's own binding, in the main frame.
-        assert!(log_script().contains("window.top !== window") && log_script().contains(LOG_BINDING) && !log_script().contains(GUARD_BINDING));
+        // The requests are kept from the start, with the bodies they keep bounded.
+        let network = steps.iter().find(|(method, _)| *method == "Network.enable").unwrap();
+        assert_eq!((network.1["maxTotalBufferSize"].as_u64(), network.1["maxResourceBufferSize"].as_u64()), (Some(net::BUFFER_TOTAL), Some(net::BUFFER_ONE)));
+        assert!(!steps.iter().any(|(_, params)| params["name"] == "wingsLog"), "the console comes over the protocol, no script of the page's own world");
     }
 
     /// An agent's script in the page's own world has the check in front of the function it runs in: a script that closes
@@ -1032,20 +1124,6 @@ mod tests {
         assert_eq!(threw(json!({ "type": "object", "description": "TypeError: x is not a function\n    at f" })), Err("TypeError: x is not a function".into()));
         assert_eq!(threw(json!({ "type": "string", "value": "plain" })), Err("plain".into()));
         assert_eq!(value_of(Err("Cannot find context with specified id".into())), Err("Cannot find context with specified id".into()));
-    }
-
-    /// The log script's posts become WebKit's lines, field by field, and nothing else is kept.
-    #[test]
-    fn the_logs_are_kept_in_webkits_shape() {
-        assert_eq!(log_line(r#"{"kind":"console","level":"error","text":"boom","extra":1}"#), Some(json!({ "kind": "console", "level": "error", "text": "boom" })));
-        assert_eq!(
-            log_line(r#"{"kind":"network","method":"GET","url":"https://a.com/x","status":500}"#),
-            Some(json!({ "kind": "network", "method": "GET", "url": "https://a.com/x", "status": 500, "error": null }))
-        );
-        assert_eq!(log_line(r#"{"kind":"cookie","text":"x"}"#), None);
-        assert_eq!(log_line("not json"), None);
-        assert_eq!(host_of("http://127.0.0.1:8765"), "127.0.0.1");
-        assert_eq!(host_of("null"), "");
     }
 
     #[test]

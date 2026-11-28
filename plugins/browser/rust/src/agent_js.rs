@@ -104,6 +104,25 @@ const HELPER: &str = r#"var w = window.__wingsAgent || (window.__wingsAgent = (f
       e.dispatchEvent(new KeyboardEvent('keyup', o));
       return 'Pressed ' + combo;
     },
+    // Where an element is once it is scrolled to, for real input: the centre of what shows of it, in CSS pixels of the viewport.
+    // `plain` is false for what a real click would open a native picker on, or has nothing to click; `drag` for what a real drag
+    // would start the system's own drag on.
+    locate: function (id) {
+      var e = get(id); e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      var b = e.getBoundingClientRect(), l = Math.max(b.left, 0), r = Math.min(b.right, innerWidth), t = Math.max(b.top, 0), d = Math.min(b.bottom, innerHeight);
+      var native = e.tagName === 'SELECT' || (e.tagName === 'INPUT' && /^(file|color|date|datetime-local|month|week|time)$/.test(e.type));
+      return { x: (l + r) / 2, y: (t + d) / 2, plain: r > l && d > t && !native, drag: !!e.closest('[draggable=true],a[href],img') };
+    },
+    // Focuses a field and selects what it holds, so typed text replaces it. `plain` is false for one real typing can't fill.
+    focus_all: function (id) {
+      var e = get(id); e.scrollIntoView({ block: 'center', behavior: 'instant' }); e.focus();
+      if (e.isContentEditable) { var r = document.createRange(), s = getSelection(); r.selectNodeContents(e); s.removeAllRanges(); s.addRange(r); return { plain: true }; }
+      if (!('value' in e) || /^(checkbox|radio|file)$/.test(e.type)) throw new Error(id + ' is not a text field: use click for checkboxes, radios and buttons');
+      var plain = !(e instanceof HTMLSelectElement) && !/^(date|datetime-local|month|week|time|color|range)$/.test(e.type);
+      if (plain) e.select();
+      return { plain: plain };
+    },
+    focused: function () { var e = document.activeElement; if (!e || e === document.body) throw new Error('Nothing has focus: click or fill a field first'); return true; },
     hover: function (id) { var e = get(id); e.scrollIntoView({ block: 'center' }); fire(e, ['pointerover', 'mouseover', 'pointermove', 'mousemove'], at(e)); return 'Hovered ' + id; },
     select: function (id, wanted) {
       var e = get(id), hit = 0;
@@ -153,12 +172,12 @@ mod tests {
 
     #[test]
     fn the_helper_is_small_and_balanced_and_has_every_function_the_tools_call() {
-        assert!(HELPER.len() < 9_000, "{} bytes", HELPER.len());
+        assert!(HELPER.len() < 10_500, "{} bytes", HELPER.len());
         for (open, close) in [('(', ')'), ('{', '}'), ('[', ']')] {
             // Brackets in the regexes and strings are few and paired, so the counts match.
             assert_eq!(HELPER.matches(open).count(), HELPER.matches(close).count(), "{open}{close}");
         }
-        for func in ["snapshot:", "element:", "describe:", "has:", "click:", "fill:", "type:", "press:", "hover:", "select:", "scroll:", "drag:"] {
+        for func in ["snapshot:", "element:", "describe:", "has:", "click:", "fill:", "type:", "press:", "hover:", "select:", "scroll:", "drag:", "locate:", "focus_all:", "focused:"] {
             assert!(HELPER.contains(func), "{func}");
         }
         // It runs in an isolated world and leaves one global, and nothing in it loads or sends anything.
