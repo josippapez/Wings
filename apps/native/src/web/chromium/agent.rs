@@ -989,13 +989,30 @@ pub fn network(page: &Shared, wanted: &WebNetwork, token: u64) {
 }
 
 /// Sends `requests` one after another, each once the one before was answered, and `done` hears how it went.
-fn in_order(channel: Rc<Channel>, mut requests: VecDeque<(&'static str, Value)>, done: Box<dyn FnOnce(Result<(), String>)>) {
+/// `still` says before each whether the page may still take it: one that went to another document, or showed a secret
+/// field, while the earlier ones were sent stops the rest.
+fn in_order(channel: Rc<Channel>, mut requests: VecDeque<(&'static str, Value)>, still: Rc<dyn Fn() -> Result<(), &'static str>>, done: Box<dyn FnOnce(Result<(), String>)>) {
     let Some((method, params)) = requests.pop_front() else { return done(Ok(())) };
+    if let Err(why) = still() {
+        return done(Err(why.into()));
+    }
     let next = channel.clone();
     channel.ask(None, method, params, move |answer| match answer {
-        Ok(_) => in_order(next, requests, done),
+        Ok(_) => in_order(next, requests, still, done),
         Err(why) => done(Err(why)),
     });
+}
+
+/// Whether the page that was checked as the document `doc` of `generation` may still take input: it is that document yet
+/// and showed no secret field since.
+fn still_clear(page: &Shared, generation: u64, doc: u64) -> Result<(), &'static str> {
+    if moved(page, generation, doc) {
+        return Err(MOVED_ON);
+    }
+    if page.agent.seen.secret(doc) {
+        return Err(guard::SECRET_FIELDS);
+    }
+    Ok(())
 }
 
 /// Real mouse and keyboard input (`input`), once the page is checked for a password, card or one-time code field as a
@@ -1021,7 +1038,9 @@ pub fn input(page: &Shared, events: &[WebInput], token: u64) {
         if let Err(why) = allowed {
             return tell(Err(why.into()));
         }
-        in_order(asked, requests, Box::new(move |done| tell(done.map(|()| json!({ "events": count })))));
+        let weak = weak_of(&page);
+        let still = Rc::new(move || weak.upgrade().map_or(Err(MOVED_ON), |page| still_clear(&page, generation, doc)));
+        in_order(asked, requests, still, Box::new(move |done| tell(done.map(|()| json!({ "events": count })))));
     });
 }
 

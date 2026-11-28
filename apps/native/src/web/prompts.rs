@@ -24,21 +24,33 @@ pub fn host_of(site: &str) -> &str {
     }
 }
 
+/// A certificate as a choice about it remembers it: the SHA-256 of its DER bytes.
+pub type Fingerprint = [u8; 32];
+
+/// The fingerprint of a certificate's DER bytes.
+pub fn fingerprint(der: &[u8]) -> Fingerprint {
+    use sha2::Digest;
+    sha2::Sha256::digest(der).into()
+}
+
 thread_local! {
-    /// The sites the person chose to open despite their certificate, by the plugin's web folder: kept for this run only,
-    /// never written down, and for one profile only, as its cookies are.
-    static TRUSTED: RefCell<HashSet<(std::path::PathBuf, String)>> = RefCell::default();
+    /// The certificates the person chose to open a site with despite their errors, by the plugin's web folder and the site:
+    /// kept for this run only, never written down, and for one profile only, as its cookies are. Another certificate for the
+    /// same site asks again, as Chrome's choice is for a host and a certificate.
+    static TRUSTED: RefCell<HashSet<(std::path::PathBuf, String, Fingerprint)>> = RefCell::default();
 }
 
-/// Whether the person chose to open `site` (`site_of`) despite its certificate, in the pages of the web folder `profile`.
-pub fn trusted(profile: &Path, site: &str) -> bool {
-    TRUSTED.with_borrow(|trusted| trusted.contains(&(profile.to_path_buf(), site.to_owned())))
+/// Whether the person chose to open `site` (`site_of`) with the certificate `cert` despite its errors, in the pages of the
+/// web folder `profile`. A certificate Chromium didn't hand over (`None`) is never trusted.
+pub fn trusted(profile: &Path, site: &str, cert: Option<Fingerprint>) -> bool {
+    cert.is_some_and(|cert| TRUSTED.with_borrow(|trusted| trusted.contains(&(profile.to_path_buf(), site.to_owned(), cert))))
 }
 
-/// Notes that the person chose to open `site` despite its certificate, for the rest of this run.
-pub fn trust(profile: &Path, site: &str) {
+/// Notes that the person chose to open `site` with the certificate `cert` despite its errors, for the rest of this run.
+pub fn trust(profile: &Path, site: &str, cert: Option<Fingerprint>) {
+    let Some(cert) = cert else { return };
     TRUSTED.with_borrow_mut(|trusted| {
-        trusted.insert((profile.to_path_buf(), site.to_owned()));
+        trusted.insert((profile.to_path_buf(), site.to_owned(), cert));
     });
 }
 
@@ -86,13 +98,15 @@ pub struct Notice {
     /// `host:port` as the person reads it.
     pub site: String,
     pub reason: String,
+    /// The certificate the site showed, which a proceed trusts: never told to a plugin.
+    pub cert: Option<Fingerprint>,
 }
 
-/// The notice for a load of `url` that failed its certificate for `reason`, or none for a site the person already chose to
-/// open (the load goes on without asking) or an address with no site.
-pub fn notice(profile: &Path, url: &str, reason: &str) -> Option<Notice> {
+/// The notice for a load of `url` that failed its certificate `cert` for `reason`, or none for a site the person already
+/// chose to open with that certificate (the load goes on without asking) or an address with no site.
+pub fn notice(profile: &Path, url: &str, reason: &str, cert: Option<Fingerprint>) -> Option<Notice> {
     let site = site_of(url)?;
-    (!trusted(profile, &site)).then(|| Notice { site, reason: reason.to_owned() })
+    (!trusted(profile, &site, cert)).then(|| Notice { site, reason: reason.to_owned(), cert })
 }
 
 /// What the person chose about a certificate notice: "Proceed to <site> (unsafe)" or "Go back".
@@ -107,7 +121,7 @@ pub enum Choice {
 pub fn decide(profile: &Path, waiting: Option<&Notice>, choice: Choice) -> Option<Choice> {
     let waiting = waiting?;
     if choice == Choice::Proceed {
-        trust(profile, &waiting.site);
+        trust(profile, &waiting.site, waiting.cert);
     }
     Some(choice)
 }
@@ -190,25 +204,32 @@ mod tests {
     }
 
     #[test]
-    fn a_site_the_person_chose_to_open_is_remembered_for_that_profile_and_that_site_only() {
+    fn a_site_the_person_chose_to_open_is_remembered_for_that_profile_site_and_certificate_only() {
         forget_all();
         let (mine, other) = (Path::new("/web/browser"), Path::new("/web/another"));
-        let waiting = notice(mine, "https://localhost:8443/", "x").expect("a site not chosen yet asks");
-        assert_eq!(waiting, Notice { site: "localhost:8443".into(), reason: "x".into() });
+        let (cert, another) = (Some(fingerprint(b"self-signed")), Some(fingerprint(b"another certificate")));
+        let waiting = notice(mine, "https://localhost:8443/", "x", cert).expect("a site not chosen yet asks");
+        assert_eq!(waiting, Notice { site: "localhost:8443".into(), reason: "x".into(), cert });
         assert_eq!(decide(mine, Some(&waiting), Choice::Back), Some(Choice::Back));
-        assert!(notice(mine, "https://localhost:8443/", "x").is_some(), "going back remembers nothing");
+        assert!(notice(mine, "https://localhost:8443/", "x", cert).is_some(), "going back remembers nothing");
         assert_eq!(decide(mine, Some(&waiting), Choice::Proceed), Some(Choice::Proceed));
-        assert!(notice(mine, "https://localhost:8443/a", "x").is_none(), "the same site goes on without asking");
-        assert!(notice(mine, "https://localhost:9443/", "x").is_some(), "another port is another site");
-        assert!(notice(mine, "https://other.test/", "x").is_some(), "another host is another site");
-        assert!(notice(other, "https://localhost:8443/", "x").is_some(), "another profile is asked again");
+        assert!(notice(mine, "https://localhost:8443/a", "x", cert).is_none(), "the same site and certificate go on without asking");
+        assert!(notice(mine, "https://localhost:8443/", "x", another).is_some(), "another certificate for the site asks again");
+        assert!(notice(mine, "https://localhost:8443/", "x", None).is_some(), "a certificate Chromium didn't hand over asks");
+        assert!(notice(mine, "https://localhost:9443/", "x", cert).is_some(), "another port is another site");
+        assert!(notice(mine, "https://other.test/", "x", cert).is_some(), "another host is another site");
+        assert!(notice(other, "https://localhost:8443/", "x", cert).is_some(), "another profile is asked again");
     }
 
     #[test]
-    fn a_proceed_with_nothing_waiting_does_nothing() {
+    fn a_proceed_with_nothing_waiting_or_no_certificate_remembers_nothing() {
         forget_all();
-        assert_eq!(decide(Path::new("/web/browser"), None, Choice::Proceed), None);
-        assert!(!trusted(Path::new("/web/browser"), "localhost"));
+        let mine = Path::new("/web/browser");
+        assert_eq!(decide(mine, None, Choice::Proceed), None);
+        let waiting = notice(mine, "https://localhost/", "x", None).unwrap();
+        assert_eq!(decide(mine, Some(&waiting), Choice::Proceed), Some(Choice::Proceed));
+        assert!(!trusted(mine, "localhost", None));
+        assert!(notice(mine, "https://localhost/", "x", None).is_some());
     }
 
     #[test]

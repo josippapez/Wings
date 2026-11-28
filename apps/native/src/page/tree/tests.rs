@@ -1533,6 +1533,10 @@ fn an_input_command_is_a_short_list_of_mouse_key_and_text_events_in_bounds() {
         json!([{"t":"mouse","type":"mouseMoved","x":1,"y":1,"button":"right"}]),
         json!([{"t":"mouse","type":"mouseMoved","x":1,"y":1,"clickCount":99}]),
         json!([{"t":"key","type":"keyDown","key":"a","commands":["format"]}]),
+        // The person's clipboard is no agent's to read or write.
+        json!([{"t":"key","type":"rawKeyDown","key":"v","modifiers":4,"commands":["paste"]}]),
+        json!([{"t":"key","type":"rawKeyDown","key":"c","modifiers":4,"commands":["copy"]}]),
+        json!([{"t":"key","type":"rawKeyDown","key":"x","modifiers":4,"commands":["cut"]}]),
         json!([{"t":"key","type":"keyDown","key":"a","modifiers":16}]),
         json!([{"t":"key","type":"keyDown","key":"a".repeat(33)}]),
         json!([{"t":"text","text":""}]),

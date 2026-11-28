@@ -1320,11 +1320,16 @@ wrap_request_handler! {
 
         /// A site whose certificate Chromium refuses: one the person chose to open goes on; the main page asks the person in the
         /// plugin's notice (`State::certificate`), which waits; a picture or a frame from such a site is refused.
-        fn on_certificate_error(&self, browser: Option<&mut Browser>, cert_error: Errorcode, request_url: Option<&CefString>, _ssl_info: Option<&mut Sslinfo>, callback: Option<&mut Callback>) -> ::std::os::raw::c_int {
+        fn on_certificate_error(&self, browser: Option<&mut Browser>, cert_error: Errorcode, request_url: Option<&CefString>, ssl_info: Option<&mut Sslinfo>, callback: Option<&mut Callback>) -> ::std::os::raw::c_int {
             let (Some(page), Some(callback)) = (self.page.upgrade().filter(|page| page.browser_is(browser)), callback) else { return 0 };
             let url = text(request_url);
             let Some(site) = prompts::site_of(&url) else { return 0 };
-            if prompts::trusted(&page.web_dir, &site) {
+            let cert = ssl_info.and_then(|info| info.x509_certificate()).and_then(|cert| cert.derencoded()).map(|der| {
+                let mut bytes = vec![0; der.size()];
+                der.data(Some(&mut bytes), 0);
+                prompts::fingerprint(&bytes)
+            });
+            if prompts::trusted(&page.web_dir, &site, cert) {
                 callback.cont();
                 return 1;
             }
@@ -1333,7 +1338,7 @@ wrap_request_handler! {
             }
             let reason = prompts::chromium_reason(error_name(&format!("{cert_error:?}")));
             page.resolve_certificate(prompts::Choice::Back);
-            if let Some(notice) = prompts::notice(&page.web_dir, &url, reason) {
+            if let Some(notice) = prompts::notice(&page.web_dir, &url, reason, cert) {
                 page.certificate.replace(Some((callback.clone(), notice)));
                 page.tell();
                 return 1;

@@ -80,12 +80,10 @@ fn named(name: &str) -> Option<(&'static str, &'static str, u32, Option<&'static
 const FUNCTION_KEYS: [(&str, &str); 12] = [("F1", "F1"), ("F2", "F2"), ("F3", "F3"), ("F4", "F4"), ("F5", "F5"), ("F6", "F6"), ("F7", "F7"), ("F8", "F8"), ("F9", "F9"), ("F10", "F10"), ("F11", "F11"), ("F12", "F12")];
 
 /// The editing command a shortcut with Ctrl or Meta stands for: macOS's text fields take it as a command, not as the key.
+/// Copy, cut and paste are none: they reach the person's own clipboard, and Wings takes no such command from an agent.
 fn command(key: &str, modifiers: u32) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
         "a" => Some("selectAll"),
-        "c" => Some("copy"),
-        "x" => Some("cut"),
-        "v" => Some("paste"),
         "z" if modifiers & SHIFT != 0 => Some("redo"),
         "z" => Some("undo"),
         _ => None,
@@ -248,6 +246,11 @@ mod tests {
         let WebInput::Key { kind, key, text, .. } = &press("Shift+a").unwrap()[1] else { panic!() };
         assert_eq!((*kind, key.as_str(), text.as_deref()), ("keyDown", "A", Some("A")), "shift alone still types");
         assert!(matches!(&press("Control++").unwrap()[1], WebInput::Key { key, .. } if key == "+"));
+        // Copy, cut and paste carry no command: the person's clipboard isn't the agent's.
+        for combo in ["Meta+c", "Meta+x", "Meta+v", "Control+v"] {
+            let WebInput::Key { commands, .. } = &press(combo).unwrap()[1] else { panic!() };
+            assert!(commands.is_empty(), "{combo}");
+        }
     }
 
     #[test]

@@ -289,7 +289,7 @@ pub enum WebInput {
     /// press and release, `modifiers` Alt 1, Ctrl 2, Meta 4, Shift 8.
     Mouse { kind: &'static str, x: f64, y: f64, button: &'static str, buttons: u32, click_count: u32, modifiers: u32 },
     /// A key event: `kind` is `keyDown`, `rawKeyDown` (no text), `keyUp` or `char`; `vk` the Windows virtual key code;
-    /// `commands` any of `selectAll`, `copy`, `cut`, `paste`, `undo`, `redo`, which a shortcut needs on macOS.
+    /// `commands` any of `selectAll`, `undo`, `redo`, which a shortcut needs on macOS (no clipboard command: Wings refuses it).
     Key { kind: &'static str, key: String, code: String, vk: u32, text: Option<String>, modifiers: u32, commands: Vec<&'static str> },
     /// Text typed in one go, as an input method makes it, into what has the focus.
     Text(String),

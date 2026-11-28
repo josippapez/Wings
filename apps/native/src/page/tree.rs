@@ -681,8 +681,9 @@ fn web_record(value: &Value) -> Option<WebGo> {
     Some(WebGo::Record(record))
 }
 
-/// The editing commands a key event may carry (`Input.dispatchKeyEvent`'s `commands`).
-const WEB_KEY_COMMANDS: [&str; 6] = ["selectAll", "copy", "cut", "paste", "undo", "redo"];
+/// The editing commands a key event may carry (`Input.dispatchKeyEvent`'s `commands`). No copy, cut or paste: they reach the
+/// person's own clipboard, and a paste would hand what is on it to the page and so to the agent.
+const WEB_KEY_COMMANDS: [&str; 3] = ["selectAll", "undo", "redo"];
 
 fn web_input_event(event: &Value) -> Option<WebInput> {
     let number = |key: &str| event.get(key).and_then(Value::as_f64).filter(|n| n.is_finite());
