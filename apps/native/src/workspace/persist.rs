@@ -48,13 +48,18 @@ impl Workspace {
         asleep: bool,
         cx: &mut Context<Self>,
     ) {
-        if !asleep {
-            return self.open_pane_at(id, cwd, history, account, session, cx);
+        if asleep {
+            self.open_pane_at(id, cwd, history, account, None, cx);
+            if let Some(pane) = self.panes.get_mut(&id) {
+                pane.session = session;
+                pane.asleep = true;
+            }
+        } else {
+            self.open_pane_at(id, cwd, history, account, session, cx);
         }
-        self.open_pane_at(id, cwd, history, account, None, cx);
-        if let Some(pane) = self.panes.get_mut(&id) {
-            pane.session = session;
-            pane.asleep = true;
+        // The tab's saved focus decides which of its panes takes the keyboard (`show`), not the last one drawn.
+        if let Some(view) = self.terminal(id) {
+            view.update(cx, |view, _| view.keep_focus_away());
         }
     }
 
