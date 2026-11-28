@@ -523,7 +523,7 @@ pub fn update(page: EntityId, profile: &Profile, specs: &[Spec], told: &Told, sc
 thread_local! {
     /// The keys each page takes for itself (`Page::claims`), which a Chromium page's window sends to Wings when one is
     /// pressed in it, where only the keys Wings binds go (`chromium::keys`).
-    static CLAIMS: RefCell<HashMap<EntityId, Vec<crate::page::tree::Shortcut>>> = RefCell::default();
+    static CLAIMS: RefCell<HashMap<EntityId, Vec<(crate::page::tree::Shortcut, bool)>>> = RefCell::default();
 }
 
 thread_local! {
@@ -542,8 +542,9 @@ pub fn take_key_from() -> Option<EntityId> {
     KEY_FROM.take()
 }
 
-/// Notes the keys the page `page` takes for itself now, none for a page that takes none.
-pub fn claim(page: EntityId, keys: Vec<crate::page::tree::Shortcut>) {
+/// Notes the keys the page `page` takes for itself now, each with whether it leaves the keyboard in the page's web page
+/// (`Claim::keeps_page`), none for a page that takes none.
+pub fn claim(page: EntityId, keys: Vec<(crate::page::tree::Shortcut, bool)>) {
     CLAIMS.with_borrow_mut(|claims| {
         if keys.is_empty() {
             claims.remove(&page);
@@ -553,8 +554,8 @@ pub fn claim(page: EntityId, keys: Vec<crate::page::tree::Shortcut>) {
     });
 }
 
-/// The keys the page `page` takes for itself.
-pub fn claimed_by(page: EntityId) -> Vec<crate::page::tree::Shortcut> {
+/// The keys the page `page` takes for itself, each with whether it leaves the keyboard in the page's web page.
+pub fn claimed_by(page: EntityId) -> Vec<(crate::page::tree::Shortcut, bool)> {
     CLAIMS.with_borrow(|claims| claims.get(&page).cloned().unwrap_or_default())
 }
 

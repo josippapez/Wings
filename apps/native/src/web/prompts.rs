@@ -188,9 +188,22 @@ pub fn chromium_level(percent: u32) -> f64 {
     (f64::from(percent) / 100.0).ln() / 1.2f64.ln()
 }
 
+/// The zoom in percent of Chromium's zoom `level`, `chromium_level`'s inverse, rounded to a whole percent.
+pub fn percent_of_level(level: f64) -> u32 {
+    (100.0 * 1.2f64.powf(level)).round().clamp(1.0, 1000.0) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zoom_level_reads_back_as_the_percent_it_was_set_from() {
+        for percent in ZOOM_LEVELS {
+            assert_eq!(percent_of_level(chromium_level(percent)), percent);
+        }
+        assert_eq!((percent_of_level(0.0), percent_of_level(1.0)), (100, 120));
+    }
 
     #[test]
     fn a_site_is_its_host_and_port_in_lower_case_without_a_name_or_password() {

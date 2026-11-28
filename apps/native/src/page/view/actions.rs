@@ -82,7 +82,7 @@ impl PageView {
     pub(super) fn sync_web(&mut self, nodes: &[Node], cx: &mut Context<Self>) {
         let Some(profile) = self.web_profile.clone() else { return };
         // A Chromium page's window sends these keys to Wings when they are pressed in it (`chromium::keys`).
-        crate::web::claim(cx.entity_id(), claiming_in(nodes).map(|page| page.claims.iter().map(|claim| claim.key.clone()).collect()).unwrap_or_default());
+        crate::web::claim(cx.entity_id(), claiming_in(nodes).map(|page| page.claims.iter().map(|claim| (claim.key.clone(), claim.keeps_page)).collect()).unwrap_or_default());
         fn webs<'a>(nodes: &'a [Node], into: &mut Vec<&'a tree::WebView>) {
             for node in nodes {
                 if let Node::WebView(web) = node {

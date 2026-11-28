@@ -1632,3 +1632,14 @@ fn a_page_names_the_keys_it_takes_even_ones_wings_binds_but_never_the_windows_or
     let Node::Page(page) = &none.children[0] else { panic!("a page") };
     assert!(page.claims.is_empty() && page.on_shortcut.is_none());
 }
+
+/// The keys a page names in `keepsPageKeys` leave the keyboard in its web page; a name it doesn't also take does nothing.
+#[test]
+fn a_page_says_which_of_its_keys_leave_the_keyboard_in_its_web_page() {
+    let parsed = tree(json!([{"id":1,"type":"Page","props":{
+        "onShortcut":"1:onShortcut", "shortcuts":["cmd-l","cmd-r","cmd-="], "keepsPageKeys":["cmd-r","cmd-=","cmd-shift-p",3]
+    },"children":[]}])).unwrap();
+    let Node::Page(page) = &parsed.children[0] else { panic!("a page") };
+    let keeps: Vec<_> = page.claims.iter().map(|claim| (claim.name.as_str(), claim.keeps_page)).collect();
+    assert_eq!(keeps, [("cmd-l", false), ("cmd-r", true), ("cmd-=", true)]);
+}

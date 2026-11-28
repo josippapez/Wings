@@ -86,6 +86,13 @@ impl Node {
         self.prop("shortcuts", keys).on("onShortcut", move |payload| on_key(payload["key"].as_str().unwrap_or_default()))
     }
 
+    /// On a `Page` with `shortcuts`: the ones that, pressed in one of its web pages, act on that page and leave the keyboard
+    /// in it (zoom, reload, back), where the others take it to Wings' window for a field of the page's (an address, a find
+    /// bar). Needs Wings 0.2.135; an older Wings takes the keyboard for each.
+    pub fn keeps_page_keys(self, keys: &[&str]) -> Self {
+        self.prop("keepsPageKeys", keys)
+    }
+
     /// On a `Page`: what the app draws behind the whole page in place of its plain ground. `"pixels"` is a slow drift of
     /// dim, dithered pixels in the page's colours, and `"pixels:<pattern>"` another pattern of them: `rain`, `checker` or
     /// `embers` (a Wings after 0.2.60; a pattern it doesn't know is the drift). `"gradient:<preset>"` is a slow gradient mesh a shader draws, dimmed so

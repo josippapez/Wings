@@ -247,7 +247,7 @@ pub struct Shared {
     /// What is typed goes from the sheet to `AuthCallback` and nowhere else.
     auth: RefCell<Option<(AuthCallback, String)>>,
     auth_sheet: RefCell<Option<Retained<NSAlert>>>,
-    /// The page's zoom in percent, kept for this view and put back as each document loads.
+    /// The page's zoom in percent: the zoom Chromium keeps for its site, read as each document loads.
     zoom: Cell<u32>,
     /// What its search last found: the text, and how many matches and which is current.
     find: RefCell<Option<(String, Option<u32>, u32)>>,
@@ -716,7 +716,7 @@ impl Shared {
         }
     }
 
-    /// Puts the view's zoom on the page: Chromium keeps its own per site, so it is set again as each document loads.
+    /// Puts the view's zoom on the page, which Chromium keeps for the page's site from then on.
     fn apply_zoom(&self) {
         if let Some(host) = self.browser.borrow().as_ref().and_then(Browser::host) {
             host.set_zoom_level(prompts::chromium_level(self.zoom.get()));
@@ -1225,8 +1225,9 @@ wrap_load_handler! {
             if let Some(frame) = frame.filter(|frame| frame.is_main() != 0) {
                 page.committed(CefString::from(&frame.url()).to_string());
                 page.find.replace(None);
-                if page.zoom.get() != 100 {
-                    page.apply_zoom();
+                // Chromium keeps a zoom for each site, across runs: the page shows at the site's, and so does its chip.
+                if let Some(host) = page.browser.borrow().as_ref().and_then(Browser::host) {
+                    page.zoom.set(prompts::percent_of_level(host.zoom_level()));
                 }
                 page.tell();
             }
@@ -1473,7 +1474,7 @@ wrap_keyboard_handler! {
             page.forwarded.set(Some(event.native_key_code));
             crate::web::key_from(page.told.page_id());
             if let Some(parent) = page.parent.borrow().clone() {
-                focus::to_wings(ns_event, &parent);
+                focus::to_wings(ns_event, &parent, !keys::keeps_page_now(&press, page.told.page_id()));
             }
             1
         }

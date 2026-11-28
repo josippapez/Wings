@@ -272,6 +272,7 @@ fn key_code(key: &str) -> (u16, String) {
         "a" => (0, "a".into()),
         "1" => (18, "1".into()),
         "`" => (50, "`".into()),
+        "=" => (24, "=".into()),
         other => (0, other.into()),
     }
 }

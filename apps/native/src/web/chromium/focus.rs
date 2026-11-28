@@ -126,10 +126,13 @@ pub fn press_of(event: &NSEvent) -> Option<Press> {
     })
 }
 
-/// Hands the press `event` to Wings' window `parent`, which takes the keyboard: Cmd-T opens a Wings tab, Cmd-K the
-/// palette, as anywhere else in Wings.
-pub fn to_wings(event: &NSEvent, parent: &NSWindow) {
-    parent.makeKeyWindow();
+/// Hands the press `event` to Wings' window `parent`, which takes the keyboard (`take`): Cmd-T opens a Wings tab, Cmd-K
+/// the palette, as anywhere else in Wings. A key the page acts on without a field of Wings' (zoom, reload) leaves the
+/// keyboard in the web page: the window hears the press all the same.
+pub fn to_wings(event: &NSEvent, parent: &NSWindow, take: bool) {
+    if take {
+        parent.makeKeyWindow();
+    }
     let (Some(characters), Some(ignoring)) = (event.characters(), event.charactersIgnoringModifiers()) else { return };
     let copy = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
         event.r#type(),

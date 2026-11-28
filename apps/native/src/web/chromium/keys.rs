@@ -96,11 +96,21 @@ pub fn remember(app_wide: Vec<Press>) {
 
 /// `goes_to_wings` with the keystrokes `remember` noted, and the keys the plugin page `page` takes for itself.
 pub fn goes_to_wings_now(press: &Press, page: gpui::EntityId) -> bool {
-    let claimed: Vec<Press> = crate::web::claimed_by(page)
-        .into_iter()
-        .map(|key| Press { key: key.key, cmd: key.cmd, ctrl: key.ctrl, alt: key.alt, shift: key.shift })
-        .collect();
+    let claimed: Vec<Press> = claimed(page).into_iter().map(|(key, _)| key).collect();
     APP_WIDE.with_borrow(|app_wide| goes_to_wings(press, app_wide, &claimed))
+}
+
+/// Whether `press`, a key the plugin page `page` takes for itself, leaves the keyboard in the web page it was pressed in
+/// (`Claim::keeps_page`): zoom or reload act on the page and the person goes on in it.
+pub fn keeps_page_now(press: &Press, page: gpui::EntityId) -> bool {
+    claimed(page).iter().any(|(key, keeps)| *keeps && press.is(key))
+}
+
+fn claimed(page: gpui::EntityId) -> Vec<(Press, bool)> {
+    crate::web::claimed_by(page)
+        .into_iter()
+        .map(|(key, keeps)| (Press { key: key.key, cmd: key.cmd, ctrl: key.ctrl, alt: key.alt, shift: key.shift }, keeps))
+        .collect()
 }
 
 #[cfg(test)]
@@ -138,6 +148,19 @@ mod tests {
         for text in ["cmd-c", "cmd-v", "cmd-x", "cmd-a", "cmd-z", "cmd-shift-z", "cmd-f", "cmd-l", "cmd-r", "t", "shift-t", "alt-t", "enter", "cmd-shift-t"] {
             assert!(!goes_to_wings(&press(text), &wings, &[]), "{text}");
         }
+    }
+
+    /// Of the keys a page takes, those it says act on its web page leave the keyboard there; the rest take it to Wings.
+    #[test]
+    fn a_claimed_key_keeps_the_page_keyboard_only_when_the_page_says_so() {
+        let page = gpui::EntityId::from(9_001_u64);
+        let shortcut = |text: &str| crate::page::tree::Shortcut::parse_claim(text).unwrap();
+        crate::web::claim(page, vec![(shortcut("cmd-="), true), (shortcut("cmd-l"), false)]);
+        assert!(keeps_page_now(&press("cmd-="), page));
+        assert!(!keeps_page_now(&press("cmd-l"), page), "Cmd-L takes the keyboard to the address field");
+        assert!(!keeps_page_now(&press("cmd-r"), page), "a key the page doesn't take");
+        assert!(!keeps_page_now(&press("cmd-="), gpui::EntityId::from(9_002_u64)), "another page's claim");
+        crate::web::claim(page, Vec::new());
     }
 
     /// The keys a plugin page takes for itself go to Wings from its web page, which keeps them otherwise (Cmd-L, Cmd-R, Cmd-F,

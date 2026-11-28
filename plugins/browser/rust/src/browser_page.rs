@@ -431,6 +431,10 @@ fn reopen_tab() {
 const SHORTCUTS: [&str; 15] =
     ["cmd-t", "cmd-w", "cmd-shift-t", "cmd-l", "cmd-r", "cmd-[", "cmd-]", "cmd-f", "cmd-g", "cmd-shift-g", "cmd-alt-i", "cmd-=", "cmd-shift-=", "cmd--", "cmd-0"];
 
+/// The keys of `SHORTCUTS` that act on the web page and leave the keyboard in it when pressed there: a find bar's step
+/// moves along the page's matches, the rest zoom it, reload it or go back and forward.
+const PAGE_KEYS: [&str; 9] = ["cmd-r", "cmd-[", "cmd-]", "cmd-g", "cmd-shift-g", "cmd-=", "cmd-shift-=", "cmd--", "cmd-0"];
+
 fn shortcut(key: &str) {
     match key {
         "cmd-t" => {
@@ -975,11 +979,11 @@ fn view() -> Vec<Node> {
             let servers = start_page::servers(&page.ports, &page.panes, &page.project);
             let recent = start_page::recent(&page.visited, &servers, RECENT);
             let body = start_page::view(&servers, &recent, open_from_start);
-            return vec![page_with(top.into_iter().flatten(), std::iter::once(body).chain(webs).chain(list)).prop("column", START_COLUMN).toasts(toasts).shortcuts(&SHORTCUTS, shortcut).on_text_scale(zoom)];
+            return vec![page_with(top.into_iter().flatten(), std::iter::once(body).chain(webs).chain(list)).prop("column", START_COLUMN).toasts(toasts).shortcuts(&SHORTCUTS, shortcut).keeps_page_keys(&PAGE_KEYS).on_text_scale(zoom)];
         }
         let dialog = tab.staged.as_ref().map(|staged| dialog_for(staged, page.busy, page.problem.as_deref(), cancel, add));
         let ask = tab.clearing_site.as_deref().map(|url| clear_site_dialog(tab, url));
-        vec![page_with(top.into_iter().flatten(), webs.chain(list).chain(dialog).chain(ask)).toasts(toasts).shortcuts(&SHORTCUTS, shortcut).on_text_scale(zoom)]
+        vec![page_with(top.into_iter().flatten(), webs.chain(list).chain(dialog).chain(ask)).toasts(toasts).shortcuts(&SHORTCUTS, shortcut).keeps_page_keys(&PAGE_KEYS).on_text_scale(zoom)]
     })
 }
 
@@ -1290,6 +1294,8 @@ mod tests {
         let (tree, handlers) = wings_plugin::ui::export(view());
         let page = &tree[0]["props"];
         assert_eq!(page["shortcuts"], serde_json::json!(SHORTCUTS), "the page names its keys");
+        assert_eq!(page["keepsPageKeys"], serde_json::json!(PAGE_KEYS), "and those that leave the keyboard in the web page");
+        assert!(PAGE_KEYS.iter().all(|key| SHORTCUTS.contains(key)) && !PAGE_KEYS.contains(&"cmd-l") && !PAGE_KEYS.contains(&"cmd-f"));
         let take = |key: &str| assert!(handlers.call(page["onShortcut"].as_str().unwrap(), &serde_json::json!({ "key": key })));
         take("cmd-r");
         assert_eq!(last_command().unwrap()["action"], "reload");

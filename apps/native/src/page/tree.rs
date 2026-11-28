@@ -863,6 +863,9 @@ pub struct Shortcut {
 pub struct Claim {
     pub name: String,
     pub key: Shortcut,
+    /// Pressed in one of the page's web pages, it acts on that page and leaves the keyboard there (`keepsPageKeys`: zoom,
+    /// reload), where any other claim takes it to Wings' window (an address field).
+    pub keeps_page: bool,
 }
 
 /// The most keys one page may take.
@@ -873,9 +876,10 @@ const CLAIMS_MAX: usize = 32;
 /// select all, undo) stays out, so a page can't take the window or the editing keys away.
 fn claims(props: &Map<String, Value>) -> Vec<Claim> {
     let Some(Value::Array(list)) = props.get("shortcuts") else { return Vec::new() };
+    let keeps: Vec<&str> = props.get("keepsPageKeys").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
     list.iter()
         .filter_map(Value::as_str)
-        .filter_map(|name| Some(Claim { name: name.to_owned(), key: Shortcut::parse_claim(name)? }))
+        .filter_map(|name| Some(Claim { name: name.to_owned(), key: Shortcut::parse_claim(name)?, keeps_page: keeps.contains(&name) }))
         .take(CLAIMS_MAX)
         .collect()
 }
