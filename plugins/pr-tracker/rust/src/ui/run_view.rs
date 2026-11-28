@@ -200,10 +200,10 @@ pub fn build(item: &CheckItem, _st: &Status) -> Node {
                 .prop("grow", true)
                 .prop("justify", "end")
                 .child({
-                    let button = Node::new("Button").prop("variant", "ghost").prop("size", "sm").on("onClick", |_| refresh());
+                    let button = Node::new("Button").prop("variant", "outline").prop("size", "sm").on("onClick", |_| refresh());
                     if busy { button.prop("disabled", true).child(wings_plugin::ui::spinner()).text("Refresh") } else { button.text("Refresh") }
                 })
-                .maybe(url.map(|url| Node::new("Button").prop("variant", "ghost").prop("size", "sm").on("onClick", move |_| host::open_url(&url)).text("Open"))),
+                .maybe(url.map(|url| Node::new("Button").prop("variant", "outline").prop("size", "sm").on("onClick", move |_| host::open_url(&url)).text("Open"))),
         );
     let body = ui(|u| match &u.run {
         None | Some(Load::Loading) => vec![Node::new("Loading").text("Loading the run…")],

@@ -164,7 +164,7 @@ fn check_row(st: &Status, c: &CheckItem, opens_run: bool) -> Node {
         .key(c.id.clone())
         .prop("edge", "top")
         .prop("gap", "xs")
-        .child(row().prop("gap", "m").child(lead).maybe((!time.is_empty()).then(|| muted(time).prop("size", "small"))).child(parts::column(52).child(row().prop("justify", "end").maybe(open_button))).maybe(opens_run.then(go)))
+        .child(row().prop("gap", "m").child(lead).maybe((!time.is_empty()).then(|| muted(time).prop("size", "small"))).child(parts::column(52).child(row().prop("justify", "end").maybe(open_button))).child(parts::column(16).maybe(opens_run.then(go))))
         .maybe(open.then(|| failure_body(&key)))
 }
 

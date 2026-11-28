@@ -17,7 +17,7 @@ use wings_plugin::{
     markdown::markdown,
     host,
     task::spawn,
-    ui::{Node, card, column_page, confirm, empty, icon_button, icons, muted, notice, page, row, section_label, small, stack, text},
+    ui::{Node, card, column_page, confirm, empty, error_state, icon, icon_button, icons, muted, notice, page, row, section_label, small, stack, text},
 };
 
 /// The native app draws a page of at most 5,000 nodes, so a long conversation shows in steps.
@@ -186,7 +186,7 @@ pub fn build(p: &Page) -> Vec<Node> {
             actions.push(busy_button("Approve", "ghost", approving, || ui(|u| u.pending = Some(Pending { label: "Approve".into(), vote: None }))));
         }
         if p.can.vote && open {
-            let menu = Node::new("Button").prop("variant", "ghost").prop("size", "sm").prop("disabled", approving).on("onClick", |_| ui(|u| u.vote_menu = !u.vote_menu)).text("Vote ▾");
+            let menu = Node::new("Button").prop("variant", "ghost").prop("size", "sm").prop("disabled", approving).on("onClick", |_| ui(|u| u.vote_menu = !u.vote_menu)).text("Vote").child(icon(24, 2.0, &icons::CHEVRON_DOWN).prop("size", 14));
             actions.push(menu);
         }
         actions.push(busy_button("Open diff", "default", p.busy == Some("diff"), || pr_page::run("diff", None)));
@@ -282,11 +282,7 @@ fn wrap(p: &Page, st: Option<&Status>, run_open: bool, verdict: Option<(bool, St
             let click = busy_button(action, "default", p.problem_busy, pr_page::fix_problem);
             vec![parts_card(vec![text("Couldn't load this pull request").prop("weight", "strong"), muted(problem.message.as_str()), row().child(click)])]
         }
-        (_, Some(error), None, _) => vec![parts_card(vec![
-            text("Couldn't load this pull request").prop("weight", "strong"),
-            text(error).prop("tone", "danger"),
-            row().child(button("Try again", "outline", pr_page::refresh)),
-        ])],
+        (_, Some(error), None, _) => vec![error_state("Couldn't load this pull request", error, Some(("Try again", Box::new(pr_page::refresh))))],
         (_, _, Some(overview), Some(st)) => loaded(p, overview, st),
         _ => vec![
             col("s").child(Node::new("Spinner").prop("label", "Loading pull request")).children([skeleton(json!("40%"), 14), skeleton(Value::Null, 90), skeleton(Value::Null, 120), skeleton(Value::Null, 70)]),
@@ -310,6 +306,7 @@ fn branch(branch: &str) -> Node {
         .prop("variant", "ghost")
         .prop("size", "icon-xs")
         .prop("label", if copied { "Copied".to_owned() } else { format!("Copy branch name {source}") })
+        .prop("title", if copied { "Copied" } else { "Copy branch name" })
         .on("onClick", move |_| {
             drop(host::copy_text(&name));
             ui(|u| u.copied = true);
@@ -318,7 +315,7 @@ fn branch(branch: &str) -> Node {
                 ui(|u| u.copied = false);
             });
         })
-        .text(if copied { "✓" } else { "⧉" });
+        .child(icon(24, 2.0, if copied { &icons::CHECK[..] } else { &icons::COPY[..] }).prop("size", 14));
     line("s")
         .child(text(source).prop("mono", true).prop("size", "small").prop("truncate", true))
         .maybe(target.map(|t| line("s").child(muted("→")).child(text(t).prop("mono", true).prop("size", "small").prop("truncate", true))))
@@ -364,7 +361,8 @@ fn checks_chip(st: &Status) -> Node {
     let c = st.checks;
     let parts: Vec<String> = [(c.failed, "failed"), (c.running, "running"), (c.queued, "queued"), (c.passed, "passed")].into_iter().filter(|(n, _)| *n > 0).map(|(n, w)| format!("{n} {w}")).collect();
     let tone = if c.failed > 0 { "danger" } else if c.pending() > 0 { "warn" } else { "success" };
-    parts::status_badge(format!("{} ›", parts.join(" · ")), tone).on("onClick", |_| ui(|u| u.tab = Tab::Checks))
+    let more = icon(24, 2.0, &icons::CHEVRON_RIGHT).prop("size", 12).prop("tone", tone);
+    parts::status_badge(parts.join(" · "), tone).child(more).on("onClick", |_| ui(|u| u.tab = Tab::Checks))
 }
 
 fn loaded(p: &Page, overview: &Overview, st: &Status) -> Vec<Node> {
