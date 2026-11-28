@@ -829,8 +829,16 @@ fn scenes() {
         // The dialog is centred, 820 wide at most and 32px clear of each edge.
         let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
         let right = left + 820.0f32.min(width - 64.0);
+        // A section's row in the list (32px rows, 2px apart): Settings opens on General, and below 800 points the
+        // list shrinks to its icons.
+        let nav = |index: f32| {
+            let (nav_x, first_row) = if width < 800.0 { (28.0, 65.0) } else { (70.0, 117.0) };
+            point(px(left + nav_x), px(first_row + 34.0 * index))
+        };
         // The font field: a click in it, a name typed, the caret moved back into the name and then a part of it selected
         // with Shift. It is at the card's right edge, and lower at 640, where the description wraps.
+        click(&mut cx, window, nav(2.0));
+        settle(&mut cx, window, Duration::from_millis(200));
         let field = point(
             px(right - 131.0),
             px(if width < 800.0 { 154.0 } else { 125.0 }),
@@ -846,8 +854,8 @@ fn scenes() {
         );
         settle(&mut cx, window, Duration::from_millis(200));
         save(&mut cx, window, &name("settings-selection"));
-        // The Cursor section, third in the list, with its style menu open.
-        click(&mut cx, window, point(px(left + 70.0), px(201.0)));
+        // The Cursor section, with its style menu open.
+        click(&mut cx, window, nav(3.0));
         settle(&mut cx, window, Duration::from_millis(200));
         // The description wraps at 640, so the row and its select sit lower.
         let select_y = if width < 800.0 { 155.0 } else { 125.0 };

@@ -70,8 +70,8 @@ pub(super) fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         let name = |state: &str| out.join(format!("{state}-{width}.png"));
         settle(cx, window, Duration::from_secs(2));
         save(cx, window, &name("editor"));
-        // The chevron at the project bar's right end, under the 40px title bar.
-        let chevron = point(px(width - 8.0 - 14.0), px(40.0 + 18.0));
+        // The editor's chevron, which plugin buttons now sit to the right of; narrow, the editor's button is the menu.
+        let chevron = if wings_native::ui::spot_at("open-in-menu").is_some() { spot("open-in-menu") } else { spot("open-in-editor") };
         click(cx, window, chevron);
         wait(cx, window, Duration::from_millis(200));
         save(cx, window, &name("editor-menu"));
@@ -119,7 +119,7 @@ pub(super) fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
                 );
             })
             .expect("show the made-up accounts");
-        // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 117 as in the desktop.
+        // Each section of Settings, by its row in the list: 32px rows, 2px apart, the first at 117, below the title and its subtitle.
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(300));
         let left = (width - 820.0f32.min(width - 64.0)) / 2.0;
@@ -138,7 +138,7 @@ pub(super) fn parity(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
         ];
         for (index, section) in sections.into_iter().enumerate() {
             // Below 800 points the list shrinks to its icons, 56 wide.
-            let (nav_x, first_row) = if width < 800.0 { (28.0, 65.0) } else { (70.0, 133.0) };
+            let (nav_x, first_row) = if width < 800.0 { (28.0, 65.0) } else { (70.0, 117.0) };
             let row = point(px(left + nav_x), px(first_row + 34.0 * index as f32));
             click(cx, window, row);
             settle(cx, window, Duration::from_millis(200));
@@ -354,7 +354,7 @@ pub(super) fn made_up_harnesses() -> Vec<wings_connect::harnesses::HarnessStatus
             Some("1.0.4"),
             Auth::Unknown,
             None,
-            Some("opencode didn't answer in 8s"),
+            Some("OpenCode didn't answer in 8s"),
         ),
     ]
 }

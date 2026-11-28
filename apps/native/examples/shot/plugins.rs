@@ -370,7 +370,10 @@ pub(super) fn plugins_modal(cx: &mut VisualTestAppContext, base: &Config, out: &
     }
 }
 
-pub(super) fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
+/// The plugins store of one pass: a pass drops the same package, so each starts from a store that hasn't installed it, as
+/// the first does. Installed already, the drop replaces it and forgets its web data, which asks WebKit for its stores and
+/// crashes in a harness that never started WebKit's run loop (it does in the app).
+fn drop_fixture() -> (Data, std::path::PathBuf) {
     use std::io::Write;
     let data = Data::temp();
     data.install_script(
@@ -400,10 +403,14 @@ pub(super) fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &P
         zip.write_all(body.as_bytes()).unwrap();
     }
     std::fs::write(&package, zip.finish().unwrap().into_inner()).unwrap();
-    let mut config = base.clone();
-    config.plugins = Some(data.paths());
+    (data, package)
+}
+
+pub(super) fn plugins_drop(cx: &mut VisualTestAppContext, base: &Config, out: &Path) {
     for width in [1000.0, 640.0] {
-        let config = config.clone();
+        let (data, package) = drop_fixture();
+        let mut config = base.clone();
+        config.plugins = Some(data.paths());
         let handle = cx
             .open_offscreen_window(size(px(width), px(640.0)), move |window, cx| {
                 cx.new(|cx| Workspace::new(config, window, cx))

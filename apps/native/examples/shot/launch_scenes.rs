@@ -184,9 +184,7 @@ pub(super) fn disk_access(cx: &mut VisualTestAppContext, base: &Config, fake: &P
         wait(cx, window, Duration::from_millis(400));
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(600));
-        // Settings, General, the first section.
-        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
-        click(cx, window, point(px(left + 70.0), px(150.0)));
+        // Settings opens on General, the first section.
         settle(cx, window, Duration::from_millis(300));
         save(
             cx,
@@ -260,9 +258,7 @@ pub(super) fn older_servers(cx: &mut VisualTestAppContext, base: &Config, fake: 
         );
         cx.simulate_keystrokes(window, "cmd-,");
         wait(cx, window, Duration::from_millis(600));
-        // Settings, General, the first section.
-        let left = (width - 820.0f32.min(width * 0.92)) / 2.0;
-        click(cx, window, point(px(left + 70.0), px(150.0)));
+        // Settings opens on General, the first section.
         wait(cx, window, Duration::from_millis(300));
         // Down to the terminal server's rows, at the end of the section.
         cx.simulate_event(
