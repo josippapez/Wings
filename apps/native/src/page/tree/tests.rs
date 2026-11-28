@@ -1519,6 +1519,10 @@ fn an_input_command_is_a_short_list_of_mouse_key_and_text_events_in_bounds() {
             WebInput::Mouse { kind: "mouseReleased", x: 10.5, y: 20.0, button: "left", buttons: 0, click_count: 1, modifiers: 0 },
         ]))
     );
+    // Insert and Delete alone, or Delete with Ctrl, touch no clipboard.
+    for plain in [json!({"t":"key","type":"rawKeyDown","key":"Insert","vk":45}), json!({"t":"key","type":"rawKeyDown","key":"Delete","vk":46,"modifiers":2})] {
+        assert!(input(json!([plain])).is_some(), "{plain}");
+    }
     assert_eq!(
         input(json!([{"t":"key","type":"rawKeyDown","key":"a","code":"KeyA","vk":65,"modifiers":2,"commands":["selectAll"]},{"t":"text","text":"hi\n"}])),
         Some(WebGo::Input(vec![
@@ -1537,6 +1541,10 @@ fn an_input_command_is_a_short_list_of_mouse_key_and_text_events_in_bounds() {
         json!([{"t":"key","type":"rawKeyDown","key":"v","modifiers":4,"commands":["paste"]}]),
         json!([{"t":"key","type":"rawKeyDown","key":"c","modifiers":4,"commands":["copy"]}]),
         json!([{"t":"key","type":"rawKeyDown","key":"x","modifiers":4,"commands":["cut"]}]),
+        json!([{"t":"key","type":"rawKeyDown","key":"Insert","code":"Insert","vk":45,"modifiers":8}]),
+        json!([{"t":"key","type":"rawKeyDown","key":"Insert","vk":45,"modifiers":2}]),
+        json!([{"t":"key","type":"rawKeyDown","key":"x","code":"Insert","modifiers":8}]),
+        json!([{"t":"key","type":"rawKeyDown","key":"Delete","code":"Delete","vk":46,"modifiers":8}]),
         json!([{"t":"key","type":"keyDown","key":"a","modifiers":16}]),
         json!([{"t":"key","type":"keyDown","key":"a".repeat(33)}]),
         json!([{"t":"text","text":""}]),

@@ -713,7 +713,14 @@ fn web_input_event(event: &Value) -> Option<WebInput> {
                 None | Some(Value::Null) => Vec::new(),
                 Some(list) => list.as_array().filter(|list| list.len() <= 2)?.iter().map(|name| WEB_KEY_COMMANDS.into_iter().find(|known| name.as_str() == Some(*known))).collect::<Option<Vec<_>>>()?,
             };
-            Some(WebInput::Key { kind, key: short("key")?, code: short("code").unwrap_or_default(), vk: small("vk", 255)?, text, modifiers: small("modifiers", 15)?, commands })
+            let (key, code, vk, modifiers) = (short("key")?, short("code").unwrap_or_default(), small("vk", 255)?, small("modifiers", 15)?);
+            // Shift-Insert pastes the person's clipboard, Ctrl-Insert copies to it and Shift-Delete cuts to it, with no
+            // command (measured in Chromium 158 on a Mac): no agent key reaches the clipboard. Modifiers: 2 Ctrl, 8 Shift.
+            let named = |name: &str, number: u32| vk == number || key.eq_ignore_ascii_case(name) || code.eq_ignore_ascii_case(name);
+            if (named("Insert", 45) && modifiers & (2 | 8) != 0) || (named("Delete", 46) && modifiers & 8 != 0) {
+                return None;
+            }
+            Some(WebInput::Key { kind, key, code, vk, text, modifiers, commands })
         }
         "text" => Some(WebInput::Text(event.get("text")?.as_str().filter(|text| !text.is_empty() && text.chars().count() <= WEB_INPUT_TEXT_MAX)?.to_owned())),
         _ => None,

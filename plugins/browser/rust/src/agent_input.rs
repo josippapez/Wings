@@ -127,6 +127,10 @@ fn key_press(key: &str, modifiers: u32) -> Result<Vec<WebInput>, String> {
     let shortcut = modifiers & (CTRL | ALT | META) != 0;
     let mut chars = key.chars();
     let (key, code, vk, text, commands): (String, String, u32, Option<String>, Vec<&'static str>) = if let Some((key, code, vk, text)) = named(key) {
+        // Wings refuses these (`tree::web_input_event`): they reach the person's clipboard even with no command.
+        if (vk == 45 && modifiers & (CTRL | SHIFT) != 0) || (vk == 46 && modifiers & SHIFT != 0) {
+            return Err("Shift+Insert, Control+Insert and Shift+Delete use your clipboard, which agents don't get: type the text instead".into());
+        }
         (key.to_owned(), code.to_owned(), vk, text.map(str::to_owned), Vec::new())
     } else if let Some((name, code)) = FUNCTION_KEYS.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)) {
         let number: u32 = name[1..].parse().unwrap_or(1);
@@ -246,6 +250,10 @@ mod tests {
         let WebInput::Key { kind, key, text, .. } = &press("Shift+a").unwrap()[1] else { panic!() };
         assert_eq!((*kind, key.as_str(), text.as_deref()), ("keyDown", "A", Some("A")), "shift alone still types");
         assert!(matches!(&press("Control++").unwrap()[1], WebInput::Key { key, .. } if key == "+"));
+        for combo in ["Shift+Insert", "Control+Insert", "Shift+Delete"] {
+            assert!(press(combo).unwrap_err().contains("clipboard"), "{combo}");
+        }
+        assert!(press("Insert").is_ok() && press("Delete").is_ok() && press("Control+Delete").is_ok());
         // Copy, cut and paste carry no command: the person's clipboard isn't the agent's.
         for combo in ["Meta+c", "Meta+x", "Meta+v", "Control+v"] {
             let WebInput::Key { commands, .. } = &press(combo).unwrap()[1] else { panic!() };
