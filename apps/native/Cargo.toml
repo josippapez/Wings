@@ -1,6 +1,6 @@
 [package]
 name = "wings-native"
-version = "0.2.135"
+version = "0.2.136"
 edition = "2024"
 publish = false
 
