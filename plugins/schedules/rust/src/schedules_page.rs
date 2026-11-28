@@ -7,7 +7,7 @@ use crate::{
     page_ask::{ask, ask_quiet, busy, clear_error, error},
     schedule::{Agent, DAYS, DAY_NUMBERS, Draft, EVERY_HOURS, Run, RunIn, Schedule, When, describe_moment, describe_next, describe_once_next, describe_when, next_run},
     store::{read_schedules, read_watches},
-    view::{RESUME, busy_button, button, field, field_group, icon_button, small_badge, textarea},
+    view::{RESUME, RUN_NOW, busy_button, button, field, field_group, icon_button, small_badge, textarea},
     worktree_setup::{WorktreeSetup, include_text, worktree_change},
 };
 use serde_json::{Value, json};
@@ -286,16 +286,24 @@ fn schedule_fields(f: &Form) -> Vec<Node> {
             "Days",
             None,
             row().prop("gap", "s").prop("wrap", true).children(DAYS.iter().zip(DAY_NUMBERS).map(|(label, number)| {
-                chip(*label, f.days.contains(&number), move || {
-                    with(|p| {
-                        if let Some(at) = p.form.days.iter().position(|d| *d == number) {
-                            p.form.days.remove(at);
-                        } else {
-                            p.form.days.push(number);
-                        }
+                // A tinted button while the day is on, an outlined one while it is off: an off chip has no box of its own and
+                // read as a label beside the tinted ones.
+                let on = f.days.contains(&number);
+                Node::new("Button")
+                    .prop("variant", if on { "secondary" } else { "outline" })
+                    .prop("size", "sm")
+                    .prop("label", format!("{label}, {}", if on { "on" } else { "off" }))
+                    .on("onClick", move |_| {
+                        with(|p| {
+                            if let Some(at) = p.form.days.iter().position(|d| *d == number) {
+                                p.form.days.remove(at);
+                            } else {
+                                p.form.days.push(number);
+                            }
+                        })
                     })
-                })
-                .key(*label)
+                    .text(*label)
+                    .key(*label)
             })),
         ))
     } else {
@@ -510,7 +518,7 @@ fn schedule_item(s: &Schedule, project: &str, now: i64, working: bool) -> Node {
     let name = s.title();
     let next = next_run(s);
     let run_id = s.id.clone();
-    let mut actions = vec![icon_button(&format!("Run {name} now"), &icons::PLAY, working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
+    let mut actions = vec![icon_button(&format!("Run {name} now"), &RUN_NOW, working, move || ask("runNow", json!({ "entry": run_id }), || {}))];
     actions.extend(entry_actions(&s.id, s.enabled, &name, working, "toggle"));
     let once = matches!(s.when, When::Once { .. });
     let lines = if once && next.is_none() {
@@ -848,6 +856,24 @@ mod tests {
         for text in ["Run now", "Pause", "Resume", "Edit", "Open", "Dismiss"] {
             assert!(!json.contains(&format!(r#""text":"{text}""#)), "{text} is no text button: {json}");
         }
+    }
+
+    /// An off day had no box of its own and read as a label beside the tinted ones: every day is a button, outlined while off.
+    #[test]
+    fn every_day_is_a_button_outlined_while_off_and_tinted_while_on() {
+        fill();
+        with(|p| p.editing = Editing::New);
+        let json = PAGE.with(|p| tree_json(form_view(&p.borrow()))).to_string();
+        for (day, variant) in [("Fri", "secondary"), ("Sat", "outline"), ("Sun", "outline")] {
+            assert!(json.contains(&format!(r#""label":"{day}, {}""#, if variant == "secondary" { "on" } else { "off" })) && json.contains(&format!(r#""variant":"{variant}""#)), "{day}: {json}");
+        }
+    }
+
+    /// Run now and Resume sat side by side as near-identical triangles: Run now is a bolt.
+    #[test]
+    fn run_now_and_resume_are_drawn_with_different_icons() {
+        assert_ne!(RUN_NOW[..], RESUME[..]);
+        assert!(!RESUME.iter().any(|path| icons::PLAY.contains(path)) && !RUN_NOW.iter().any(|path| icons::PLAY.contains(path)));
     }
 
     #[test]

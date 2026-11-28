@@ -23,6 +23,9 @@ pub fn busy_button(label: &str, variant: &str, size: Option<&str>, aria: Option<
 /// Lucide's `circle-play`, which the Resume button draws; the other icons are in `ui::icons`.
 pub const RESUME: [&str; 2] = ["M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z", "m10 8 6 4-6 4z"];
 
+/// Lucide's `zap`, which Run now draws: a bolt, so it is not taken for Resume's circled play beside it on a paused row.
+pub const RUN_NOW: [&str; 1] = ["M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"];
+
 /// A quiet square button holding one of the icons, named by `label`, which is also its tooltip. It shows a spinner
 /// instead of the icon, and takes no clicks, while `busy`.
 pub fn icon_button(label: &str, paths: &[&str], busy: bool, on_click: impl Fn() + 'static) -> Node {
