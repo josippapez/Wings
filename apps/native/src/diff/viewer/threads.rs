@@ -563,7 +563,7 @@ pub(super) fn ago(created: &str, now: DateTime<Utc>) -> Option<String> {
         _ => (round(ms / 60_000.0), "minute"),
     };
     Some(match (n, unit) {
-        (0, _) => format!("this {unit}"),
+        (0, _) => "just now".into(),
         (-1, "day") => "yesterday".into(),
         (1, "day") => "tomorrow".into(),
         (n, _) if n < 0 => format!("{} {unit}{} ago", -n, if n == -1 { "" } else { "s" }),
@@ -581,7 +581,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let ago = |at: &str| ago(at, now);
-        assert_eq!(ago("2026-11-08T11:59:40Z").as_deref(), Some("this minute"));
+        assert_eq!(ago("2026-11-08T11:59:40Z").as_deref(), Some("just now"));
         assert_eq!(
             ago("2026-11-08T11:55:00Z").as_deref(),
             Some("5 minutes ago")

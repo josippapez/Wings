@@ -285,7 +285,8 @@ pub(super) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// "5 minutes ago", "yesterday": how `Intl.RelativeTimeFormat` says it in English with `numeric: "auto"`.
+/// "5 minutes ago", "yesterday": how `Intl.RelativeTimeFormat` says it in English with `numeric: "auto"`, but "just now"
+/// for under a minute, as plugins and the Project page say it.
 pub(super) fn ago(now: u64, then: u64) -> String {
     let round = |x: f64| (x + 0.5).floor() as i64;
     let minutes = round((then as f64 - now as f64) / 60_000.0);
@@ -301,7 +302,7 @@ pub(super) fn ago(now: u64, then: u64) -> String {
 
 fn relative_time(count: i64, unit: &str) -> String {
     match (count, unit) {
-        (0, "minute") => "this minute".into(),
+        (0, "minute") => "just now".into(),
         (0, "hour") => "this hour".into(),
         (0, _) => "today".into(),
         (-1, "day") => "yesterday".into(),
@@ -1790,7 +1791,7 @@ mod tests {
     fn times_read_like_the_desktops() {
         let now = 1_000_000_000_000;
         let minutes = |n: u64| now - n * 60_000;
-        assert_eq!(ago(now, now), "this minute");
+        assert_eq!(ago(now, now), "just now");
         assert_eq!(ago(now, minutes(1)), "1 minute ago");
         assert_eq!(ago(now, minutes(5)), "5 minutes ago");
         assert_eq!(ago(now, minutes(60)), "1 hour ago");
