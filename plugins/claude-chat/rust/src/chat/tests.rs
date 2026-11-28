@@ -684,6 +684,23 @@ fn help_lists_every_command_and_asks_claude_code_for_its_skills_again() {
     with(|c| c.help = None);
 }
 
+/// Typing `/` opens the slash menu, which has Claude Code look for skills on disk again, once per opening, and the list
+/// it then sends replaces the menu's in place.
+#[test]
+fn opening_the_slash_menu_asks_claude_code_for_its_skills_once() {
+    let calls = recording();
+    with(|c| c.menu_reload = Default::default());
+    typed("/");
+    typed("/de");
+    let writes = written(&calls);
+    assert_eq!(writes.len(), 1, "one per opening");
+    let asked: Value = serde_json::from_str(writes[0].trim()).unwrap();
+    assert_eq!(asked["request"], json!({ "subtype": "reload_skills" }));
+    with(|c| c.session.hear(&json!({ "type": "system", "subtype": "commands_changed", "commands": [{ "name": "deploy-preview", "description": "Deploy a preview", "argumentHint": "" }] })));
+    assert_eq!(with(|c| super::command_matches(c).first().map(|command| command.name.clone())), Some("deploy-preview".into()));
+    typed("");
+}
+
 /// Claude Code sends a `/word` it doesn't know to Claude as text, and so does the chat.
 #[test]
 fn a_slash_word_no_one_knows_is_sent_as_a_message() {
@@ -706,7 +723,8 @@ fn an_alias_of_a_listed_command_completes_and_is_sent() {
     assert_eq!(with(|c| super::command_matches(c).first().map(|command| (command.name.clone(), command.aliases.clone()))), Some(("clear".into(), vec!["reset".into(), "new".into()])));
     with(|c| c.draft = "/reset".into());
     super::send();
-    assert!(written(&calls)[0].contains("\"content\":\"/reset\""));
+    // The menu's own ask for skills went first.
+    assert!(written(&calls).iter().any(|line| line.contains("\"content\":\"/reset\"")));
 }
 
 /// With Claude Code stopped, `/help` still lists the commands, and Escape closes it rather than doing anything else.

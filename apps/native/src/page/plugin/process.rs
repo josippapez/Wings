@@ -53,6 +53,8 @@ pub(super) const CALLS: [&str; 7] = ["spawn", "processWrite", "processArm", "pro
 
 /// How long after its time an armed message may still go (`processArm`), as a computer asleep at the time wakes later.
 const ARMED_FOR_MS: u64 = 24 * 3_600_000;
+/// The shortest time between two reloads of Claude Code's skills or plugins a page writes without a click.
+const RELOAD_EVERY_MS: u64 = 10_000;
 /// How far ahead a message may be armed: a plan's limit resets within a day.
 const ARM_AHEAD_MOST_MS: u64 = 25 * 3_600_000;
 /// The longest message that may be armed.
@@ -238,6 +240,8 @@ pub(super) struct Running {
     pub(super) asks: Mutex<HashMap<String, &'static str>>,
     /// The message your click armed to go later, like a chat's "Continue when it resets" (`processArm`).
     armed: Mutex<Option<Armed>>,
+    /// When a page last wrote a reload of Claude Code's skills or plugins without a click (`unprompted`), in ms.
+    reloaded: Mutex<Option<u64>>,
 }
 
 impl Running {
@@ -500,6 +504,7 @@ impl Shared {
                 order: Mutex::default(),
                 asks: Mutex::default(),
                 armed: Mutex::default(),
+                reloaded: Mutex::default(),
             })
         };
         // Only a tab's page has a place that comes back after a restart, and only Wings' own plugins keep a program
@@ -581,7 +586,8 @@ impl Shared {
     }
 
     /// Whether `text` is only what a page may write to its program `token` without a click: Claude Code control requests
-    /// that draw what its plugins show (`ui_attach`, `ui_render`, `ui_panes`) or read the plan's usage (`get_usage`),
+    /// that draw what its plugins show (`ui_attach`, `ui_render`, `ui_panes`) or read the plan's usage (`get_usage`), or have it read its skills and plugins
+    /// from disk again (`reload_skills`, `reload_plugins`, one every 10 s),
     /// answers to the reads and fills of the message box the program asked for (`asks`) and nobody answered yet, each in
     /// its ask's shape: `{ text, cursor }` for a read, `{ filled }` for a fill, and the one message your click armed
     /// (`processArm`), word for word, once its time has come. Apart from that message none of it reaches the agent,
@@ -592,8 +598,10 @@ impl Shared {
         };
         let mut asks = running.asks.lock().unwrap();
         let mut armed = running.armed.lock().unwrap();
+        let mut reloaded = running.reloaded.lock().unwrap();
         let now = now_ms();
         let mut sent_armed = false;
+        let mut reload_sent = false;
         let mut answered = Vec::new();
         let mut lines = text.lines().filter(|line| !line.trim().is_empty()).peekable();
         let allowed = lines.peek().is_some()
@@ -604,6 +612,13 @@ impl Shared {
                 match line["type"].as_str() {
                     // Stopping the turn makes Claude do nothing, so a chat's "stop near the limit" may send it unasked.
                     // Which of a mod's panes Wings shows and which has the keys, as Claude Code asked: they tell, and start nothing.
+                    // A reload of skills or plugins only has Claude Code read the disk again, which a chat's slash menu asks for
+                    // when you type `/`: typing isn't a click, so at most one in RELOAD_EVERY_MS goes.
+                    Some("control_request") if matches!(line["request"]["subtype"].as_str(), Some("reload_skills" | "reload_plugins")) => {
+                        let fits = !reload_sent && reloaded.is_none_or(|last| now.saturating_sub(last) >= RELOAD_EVERY_MS);
+                        reload_sent |= fits;
+                        fits
+                    }
                     Some("control_request") => matches!(line["request"]["subtype"].as_str(), Some("ui_attach" | "ui_render" | "ui_panes" | "ui_pane_show" | "ui_pane_focus" | "interrupt" | "get_usage")),
                     Some("user") => {
                         let fits = !sent_armed
@@ -632,6 +647,9 @@ impl Shared {
                 }
             });
         if allowed {
+            if reload_sent {
+                *reloaded = Some(now);
+            }
             for id in answered {
                 asks.remove(&id);
             }

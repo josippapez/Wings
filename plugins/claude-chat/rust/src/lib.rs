@@ -33,6 +33,7 @@ mod screens;
 mod code_view;
 mod composer;
 mod commands;
+mod menu_reload;
 #[cfg(any(feature = "chat", test))]
 mod copy;
 mod diff_preview;

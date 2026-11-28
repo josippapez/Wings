@@ -125,6 +125,7 @@ pub(super) fn take(host: &Arc<Shared>, left: &LeftJob) -> Option<(Arc<Job>, JobE
         out: Mutex::new(out),
         order: Mutex::default(),
         asks: Mutex::default(),
+        reloaded: Mutex::default(),
         // A message armed before Wings restarted is gone with it: the page asks your click again.
         armed: Mutex::default(),
     });

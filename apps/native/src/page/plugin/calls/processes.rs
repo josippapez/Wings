@@ -455,6 +455,25 @@ fn a_mods_pane_shown_or_focused_is_told_without_a_click() {
     caller.send("processStop", json!({ "token": "chat" }));
 }
 
+/// A chat's slash menu has Claude Code read its skills and plugins from disk again when you type `/`, which isn't a
+/// click: those two requests go without one, one every 10 s, and nothing else that reads or changes more does.
+#[test]
+fn a_reload_of_skills_or_plugins_goes_without_a_click_once_every_ten_seconds() {
+    let rig = rig(&["cat []"]);
+    let caller = Caller::start(&rig.host);
+    caller.send("spawn", spawn("chat", "cat", &[]));
+    let reload = |subtype: &str| format!("{}\n", json!({ "type": "control_request", "request_id": "r", "request": { "subtype": subtype } }));
+    let refused = Err("A page can write to a program only right after you click or type in it".to_owned());
+    caller.send("processWrite", json!({ "token": "chat", "text": reload("reload_skills") }));
+    assert_eq!(hear(&caller, 2).1, vec![Ok(Value::Null)]);
+    // The next one, of either kind, has to wait.
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": reload("reload_skills") })), refused);
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": reload("reload_plugins") })), refused);
+    // Others of its kind still need a click.
+    assert_eq!(caller.call("processWrite", json!({ "token": "chat", "text": reload("reload_everything") })), refused);
+    caller.send("processStop", json!({ "token": "chat" }));
+}
+
 /// A chat's "Continue when it resets": your click arms one message, and the page may write exactly that message without
 /// a click once its time has come, once. Before its time, another text, a second write, or arming without a click are
 /// refused; taking it back needs no click.

@@ -72,6 +72,8 @@ pub struct Chat {
     took_suggestion: Option<String>,
     /// Whether Tab on a bare mid-message `/` asked for every command.
     slash_all: bool,
+    /// When the slash menu last asked Claude Code to look for skills again (`menu_reload.rs`).
+    menu_reload: crate::menu_reload::MenuReload,
     /// The pictures pasted into the message, as (media type, base64), sent with it.
     pub images: Vec<(String, String)>,
     /// How many items are shown, back from where they end.
@@ -231,6 +233,7 @@ thread_local! {
         draft: String::new(),
         took_suggestion: None,
         slash_all: false,
+        menu_reload: Default::default(),
         images: Vec::new(),
         shown: PAGE,
         until: None,
@@ -1798,6 +1801,11 @@ pub fn typed(value: &str) -> bool {
     // A `#word` lists issues, which are read the first time and then once a minute at most.
     if with(|c| !c.draft.starts_with('/') && issues::active(&c.draft).is_some()) {
         issues::want();
+    }
+    // Opening the slash menu has Claude Code look for skills on disk again: the menu shows its list at once and changes
+    // in place when the new one comes (`commands_changed`).
+    if with(|c| c.menu_reload.typed(&c.draft, host::now() as u64)) {
+        write(|_, _| Some(session::request(RELOAD_SKILLS, json!({ "subtype": "reload_skills" }))));
     }
     let after = with(|c| drawn_from(c).zip(Some(c.session.suggestion.clone())));
     before.is_none() || before != after
