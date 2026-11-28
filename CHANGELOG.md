@@ -2,9 +2,11 @@
 
 What changed in each Wings release, newest first.
 
-## 0.2.131 · 2026-11-28
+## 0.2.132 · 2026-11-28
 
-- **Chromium 158 for the Browser** (Browser 0.4.2): the Chromium engine moves to Chromium 158.0.8127.89, which fixes a critical Chrome security issue (CVE-2026-134401). If you use Chromium, Browser settings shows Update: it downloads 154 MB once, and the Browser uses WebKit until then.
+- **Downloads in the Browser** (Browser 0.5.0): links and files a site sends now download to your Downloads folder, never over a file that's there, with progress, Open and Show in Finder in a list under the page. A page can't start more than one download by itself; click its link for the rest. Agents see their downloads with the new `downloads` tool.
+- **Pop-ups and new-tab links open as tabs**: a link that opens a new window, or a sign-in pop-up, opens as a tab beside its page and can still talk to it, so "Sign in with…" pop-ups finish and close themselves. Cmd-click opens a tab in the background. A pop-up a page opens without a click is blocked, with a note saying so.
+- **Chromium 158 for the Browser**: the Chromium engine moves to Chromium 158.0.8127.89, which fixes a critical Chrome security issue (CVE-2026-134401). If you use Chromium, Browser settings shows Update: it downloads 154 MB once, and the Browser uses WebKit until then.
 
 ## 0.2.130 · 2026-11-28
 
