@@ -58,7 +58,7 @@ fn crumb_row(crumbs: &[(String, String)], detail: String) -> Node {
                     (name.clone(), go)
                 })
                 .collect();
-            menu("…", "Folders in between", "ghost", "sm", false, items)
+            menu("Folders in between", false, items)
         });
         gap(row(), "none").key(path.as_str()).maybe((i > 0).then(separator)).maybe(between.is_some().then(separator)).maybe(between).child(item)
     }).chain([muted(detail).prop("size", "small").prop("truncate", true)]))
@@ -99,8 +99,8 @@ fn toolbar(p: &Page, done: &Done, name: &str, focus: &str) -> Node {
         .child(icon_button("Rescan", &icons::ROTATE_CW, move || start_scan(rescan.clone())))
         .child(icon_button("Reveal in Finder", &icons::FOLDER_OPEN, move || run("reveal", json!({ "path": reveal }))));
     let history = gap(row(), "none")
-        .child(named_button("‹", "Back", "ghost", "icon-sm", || walk(-1)).prop("title", "Back").prop("disabled", !(followed && p.trail.at > 0)))
-        .child(named_button("›", "Forward", "ghost", "icon-sm", || walk(1)).prop("title", "Forward").prop("disabled", !(followed && p.trail.at + 1 < p.trail.stack.len())));
+        .child(icon_button("Back", &icons::CHEVRON_LEFT, || walk(-1)).prop("disabled", !(followed && p.trail.at > 0)))
+        .child(icon_button("Forward", &icons::CHEVRON_RIGHT, || walk(1)).prop("disabled", !(followed && p.trail.at + 1 < p.trail.stack.len())));
     let left = Node::new("Slot")
         .prop("name", "children")
         .child(button("← Disks", "ghost", "sm", || with(|p| p.leave())))
@@ -221,7 +221,7 @@ fn row_menu(row: &Row, collected: bool) -> Node {
     if items.is_empty() {
         return stack().prop("gap", "none");
     }
-    menu("⋯", &format!("More for {}", row.name), "ghost", "icon-xs", true, items)
+    menu(&format!("More for {}", row.name), true, items)
 }
 
 /// A click on a row: a folder is gone into, and the smaller items and the hidden space are opened.
@@ -394,7 +394,7 @@ fn collector_bar(p: &Page) -> Node {
                 .child(gap(stack(), "none").prop("grow", true).child(text(name.as_str()).prop("truncate", true)).child(muted(parent_path(&item.path).unwrap_or_default()).prop("size", "tiny").prop("truncate", true)))
                 .child(muted(bytes(item.size)))
                 .child(named_button("Reveal", &format!("Reveal {name} in Finder"), "ghost", "xs", move || run("reveal", json!({ "path": reveal }))))
-                .child(named_button("×", &format!("Remove {name} from the Collector"), "ghost", "icon-xs", move || run("uncollect", json!({ "paths": [remove] }))).prop("title", "Remove"))
+                .child(icon_button(&format!("Remove {name} from the Collector"), &icons::CLOSE, move || run("uncollect", json!({ "paths": [remove] }))).tooltip("Remove"))
         }))
     });
     Node::new("Bar")

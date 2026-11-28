@@ -140,7 +140,7 @@ fn scan_row(scan: &crate::state::ScanInfo, disks: Option<&Vec<DiskRow>>) -> Node
             });
             sync_level();
         }))
-        .child(named_button("Forget", &format!("Forget the scan of {name}"), "ghost", "sm", move || tell_main("forget", json!({ "root": forget_root }))))
+        .child(named_button("Forget", &format!("Forget the scan of {name}"), "outline", "sm", move || tell_main("forget", json!({ "root": forget_root }))))
 }
 
 fn overview(p: &Page) -> Vec<Node> {

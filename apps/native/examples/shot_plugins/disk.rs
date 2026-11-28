@@ -48,7 +48,7 @@ pub(super) fn disk(out: PathBuf) {
     let views: [(&str, Steps, Steps); 4] = [
         ("overview", vec![], vec![]),
         ("map", vec![("Scan", scan, "Downloads")], vec![]),
-        ("menu", vec![("Scan", scan, "Downloads"), ("⋯", 0, "Add to Collector")], vec![]),
+        ("menu", vec![("Scan", scan, "Downloads"), ("More for Downloads", 0, "Add to Collector")], vec![]),
         (
             "collected",
             vec![
