@@ -84,7 +84,7 @@ pub(super) fn worktrees(out: PathBuf) {
         };
         shown(&mut cx, "uncommitted", "list");
         assert!(handle.read_with(&cx, |view, _| view.press("Remove 1 merged & clean", 0)).unwrap());
-        shown(&mut cx, "Also delete their branches", "confirm");
+        shown(&mut cx, "Also delete its branch", "confirm");
         assert!(handle.read_with(&cx, |view, _| view.text().contains("Remove 1 merged & clean")).unwrap());
         let _ = cx.update_window(window, |_, window, _| window.remove_window());
     }

@@ -223,8 +223,8 @@ fn confirm_card(p: &Page, asked: &Ask, repo: &Repo, branch: Option<&str>, workin
         Kind::Remove => format!("Remove {}?", shorten_path(&paths[0])),
     };
     let branches = match (kind, branch) {
-        (Kind::Bulk, _) => Some("Also delete their branches (git branch -d)".to_owned()),
-        (Kind::Remove, Some(branch)) => Some(format!("Also delete branch {branch} (git branch -d)")),
+        (Kind::Bulk, _) => Some(if paths.len() == 1 { "Also delete its branch" } else { "Also delete their branches" }.to_owned()),
+        (Kind::Remove, Some(branch)) => Some(format!("Also delete branch {branch}")),
         _ => None,
     };
     let body = match &p.refused {
@@ -244,7 +244,7 @@ fn confirm_card(p: &Page, asked: &Ask, repo: &Repo, branch: Option<&str>, workin
         body,
         [
             button(if *kind == Kind::Prune { "Prune" } else { "Remove" }, "destructive", false, move || do_confirm(checked)).disabled(working),
-            button("Cancel", "ghost", false, || with(|page| page.asked = None)).disabled(working),
+            button("Cancel", "outline", false, || with(|page| page.asked = None)).disabled(working),
         ],
     )
 }
@@ -471,6 +471,19 @@ mod tests {
     }
 
     const LIST: &str = "worktree /dev/app\nHEAD 1\nbranch refs/heads/main\n\nworktree /dev/app-a\nHEAD 2\nbranch refs/heads/a\n\nworktree /dev/app-b\nHEAD 3\nbranch refs/heads/b\nlocked\n";
+
+    #[test]
+    fn the_branch_tick_in_a_bulk_confirm_is_singular_for_one_worktree_and_leaves_git_out_of_its_words() {
+        let repo = Repo { root: "/dev/app".into(), list: vec![], facts: Facts::default(), probes: Default::default(), checked: true };
+        let ticks = |paths: Vec<String>| {
+            let asked = Ask { kind: Kind::Bulk, root: repo.root.clone(), paths };
+            tree_json(confirm_card(&Page::default(), &asked, &repo, None, false)).to_string()
+        };
+        let one = ticks(vec!["/dev/app-a".into()]);
+        assert!(one.contains("Also delete its branch") && !one.contains("git branch"), "{one}");
+        let two = ticks(vec!["/dev/app-a".into(), "/dev/app-b".into()]);
+        assert!(two.contains("Also delete their branches") && !two.contains("git branch"), "{two}");
+    }
 
     #[test]
     fn a_worktrees_actions_are_ghost_icon_buttons_with_a_tooltip_and_what_stops_a_removal_is_the_tooltip() {
