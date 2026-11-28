@@ -22,6 +22,9 @@ use crate::{theme, ui::motion};
 pub struct Tooltip {
     label: Label,
     shortcut: Option<SharedString>,
+    /// Room kept under the card. GPUI pushes a tooltip that would pass the window's foot up until it fits, over the
+    /// row at the foot the pointer is on; with this room the card ends above that row.
+    clear_below: f32,
 }
 
 /// What a tooltip says: fixed when it shows, or read again each time the window draws it.
@@ -38,17 +41,17 @@ pub fn tooltip(
     let label = label.into();
     move |_, cx| {
         let (label, shortcut) = (Label::Fixed(label.clone()), shortcut.clone());
-        cx.new(|_| Tooltip { label, shortcut }).into()
+        cx.new(|_| Tooltip { label, shortcut, clear_below: 0.0 }).into()
     }
 }
 
 /// `tooltip` whose label is read again each time the window draws it, so it counts on while it shows: for a row that
-/// keeps its drawing while what it says changes.
+/// keeps its drawing while what it says changes. It keeps clear of the row at the window's foot it is for.
 pub fn tooltip_with(label: impl Fn() -> SharedString + 'static) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let label: Rc<dyn Fn() -> SharedString> = Rc::new(label);
     move |_, cx| {
         let label = Label::Live(label.clone());
-        cx.new(|_| Tooltip { label, shortcut: None }).into()
+        cx.new(|_| Tooltip { label, shortcut: None, clear_below: 44.0 }).into()
     }
 }
 
@@ -102,7 +105,7 @@ impl Render for Tooltip {
             }
         };
         // tw-animate-css's default 150ms, as the desktop's tooltip sets no duration.
-        tip(motion::TOOLTIP_IN, card).into_any_element()
+        div().pb(px(self.clear_below)).child(tip(motion::TOOLTIP_IN, card)).into_any_element()
     }
 }
 

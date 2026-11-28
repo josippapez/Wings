@@ -284,3 +284,17 @@ fn a_window_without_the_socket_checks_nothing_by_itself() {
     window.read(|w, _| assert!(w.tools.list.is_none()));
     window.draw();
 }
+
+#[test]
+fn claude_code_not_checked_offers_check() {
+    let (_app, mut window, _) = open_with_mac();
+    window.update(|w, window, cx| {
+        w.open_settings(window, cx);
+        w.set_settings_section(Section::Agents, cx);
+    });
+    window.draw();
+    assert!(
+        crate::ui::spot_at("claude-check").is_some() || window.read(|w, _| w.claude.accounts.is_some()),
+        "a Claude Code not read yet has a Check button"
+    );
+}

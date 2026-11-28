@@ -101,7 +101,6 @@ impl Workspace {
                             )
                             .child(ui::badge(Variant::Secondary, Some(tone), true, word)),
                     )
-                    .child(muted(format!("{} · {}", view.manifest.version, source_label(&view)))),
             )
             .child(
                 div()

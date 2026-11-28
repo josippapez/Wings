@@ -126,7 +126,7 @@ impl Workspace {
         let refresh = ui::button(
             "harnesses-refresh",
             "Check the coding agents again",
-            ui::Variant::Ghost,
+            ui::Variant::Outline,
             checks.checking,
             div()
                 .flex()
@@ -335,10 +335,10 @@ mod tests {
                 true,
                 Auth::Unknown,
                 None,
-                Some("codex didn't answer in 8s")
+                Some("Codex didn't answer in 8s")
             ))
             .0,
-            "codex didn't answer in 8s"
+            "Codex didn't answer in 8s"
         );
     }
 

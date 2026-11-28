@@ -326,7 +326,8 @@ fn check(lookup: &Lookup, h: &Harness) -> HarnessStatus {
                 Some((code, out)) => (status.auth, status.account) = (h.read)(code, &out),
                 None => {
                     status.note = Some(format!(
-                        "{program} didn't answer in {}s",
+                        "{} didn't answer in {}s",
+                        h.name,
                         lookup.timeout.as_secs()
                     ))
                 }
@@ -550,7 +551,7 @@ exec sleep 30"#;
         let claude = &list[0];
         assert_eq!(claude.version.as_deref(), Some("2.0.0"));
         assert_eq!(claude.auth, Auth::Unknown);
-        assert_eq!(claude.note.as_deref(), Some("claude didn't answer in 1s"));
+        assert_eq!(claude.note.as_deref(), Some("Claude Code didn't answer in 1s"));
         let grok = &list[3];
         assert_eq!(
             (grok.auth, grok.account.as_deref()),

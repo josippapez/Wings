@@ -453,9 +453,13 @@ fn inline_with(id: impl Into<SharedString>, content: &Inline, open: Option<&Open
     cuts.sort_unstable();
     cuts.dedup();
     let mut highlights = Vec::new();
+    let mut monospace = Vec::new();
     for pair in cuts.windows(2) {
         let range = pair[0]..pair[1];
         let covers = |r: &Range<usize>| r.start <= range.start && range.end <= r.end;
+        if content.styles.iter().any(|(r, mark)| matches!(mark, Style::Code) && covers(r)) {
+            monospace.push((range.clone(), SharedString::from(DEFAULT_FONT_FAMILY)));
+        }
         let mut style = HighlightStyle::default();
         for (_, mark) in content.styles.iter().filter(|(r, _)| covers(r)) {
             match mark {
@@ -485,7 +489,9 @@ fn inline_with(id: impl Into<SharedString>, content: &Inline, open: Option<&Open
             highlights.push((range, style));
         }
     }
-    let styled = StyledText::new(content.text.clone()).with_highlights(highlights);
+    let styled = StyledText::new(content.text.clone())
+        .with_highlights(highlights)
+        .with_font_family_overrides(monospace);
     if content.links.is_empty() {
         return styled.into_any_element();
     }

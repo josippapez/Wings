@@ -37,7 +37,7 @@ impl Workspace {
                 None,
             ),
             (
-                "Run claude or opencode in a pane. Wings shows the agent's state in the sidebar and on its tab.",
+                "Run Claude Code or OpenCode in a pane. Wings shows the agent's state in the sidebar and on its tab.",
                 None,
             ),
             (
@@ -66,8 +66,18 @@ impl Workspace {
                         .text_color(rgb(theme::foreground()))
                         .child((index + 1).to_string()),
                 )
-                .child(div().flex_1().min_w_0().child(text))
-                .children(keys.map(kbd))
+                // The key under its sentence, not at the far end of the row, away from what it belongs to.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .gap(px(6.0))
+                        .child(text)
+                        .children(keys.map(kbd)),
+                )
         });
         div()
             .id("welcome")

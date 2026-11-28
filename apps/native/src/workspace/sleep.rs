@@ -280,7 +280,7 @@ impl Workspace {
             self.switch_row(
                 "sleep-agents",
                 "Put idle agents to sleep",
-                "Ends an idle Claude Code or opencode that isn't on screen, which frees about 400 MB each. It stays in \
+                "Ends an idle Claude Code or OpenCode that isn't on screen, which frees about 400 MB each. It stays in \
                  the Agents list as sleeping, and opening it picks the session up again.",
                 current.enabled,
                 |this, on, cx| this.set_prefs(|prefs| prefs.sleep.enabled = on, cx),

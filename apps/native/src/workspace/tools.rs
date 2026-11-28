@@ -343,7 +343,7 @@ impl Workspace {
         let check = ui::button(
             "tools-check",
             "Check the tools again",
-            Variant::Ghost,
+            Variant::Outline,
             tools.checking,
             div()
                 .flex()
@@ -403,7 +403,7 @@ impl Workspace {
         let full = ui::button(
             "tools-changelog",
             "Open Claude Code's changelog",
-            Variant::Ghost,
+            Variant::Outline,
             false,
             "Full changelog",
         )
@@ -506,8 +506,9 @@ impl Workspace {
 /// A tool's row: its name and whether it is current, what uses it, its versions and where it came from, and Update.
 fn tool_row(tool: &ToolStatus, run: Option<&Run>, busy: bool, cx: &mut Context<Workspace>) -> AnyElement {
     let going = matches!(run, Some(Run::Going(_)));
+    // A running update says "Updating…" on its button and shows the working dot here, not the words twice.
     let status = if going {
-        Some((theme::working(), "Updating…"))
+        None
     } else if !tool.found {
         Some((theme::idle(), "Not installed"))
     } else if tool.has_update() {

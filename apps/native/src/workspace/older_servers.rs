@@ -119,11 +119,11 @@ impl Workspace {
                 .text_size(px(11.0))
                 .text_color(rgb(theme::muted_foreground()))
                 .tooltip(ui::tooltip(
-                    "Runs on the terminal server from before Wings updated, with that server's permissions, until \
-                     you close and reopen it.",
+                    "Kept running from before Wings updated, with the permissions it had then, until you close \
+                     and reopen it.",
                     None,
                 ))
-                .child("older server")
+                .child("from before the update")
                 .into_any_element(),
         )
     }
@@ -362,9 +362,9 @@ impl Workspace {
             .iter()
             .map(|row| {
                 let label = if row.current {
-                    format!("Terminal server {} (current)", row.version)
+                    "Terminals of this Wings".to_owned()
                 } else {
-                    format!("Terminal server {} (older)", row.version)
+                    older_name(&self.older.list, row)
                 };
                 let mut hint = terminals_line(row);
                 if !row.current {
@@ -379,7 +379,7 @@ impl Workspace {
                     let socket = row.socket.clone();
                     ui::button(
                         SharedString::from(format!("stop-server-{}", row.version)),
-                        format!("Stop terminal server {}", row.version),
+                        format!("Stop the {}", lowercase_first(&older_name(&self.older.list, row))),
                         Variant::Secondary,
                         false,
                         "Stop",
@@ -438,11 +438,11 @@ impl Workspace {
         self.refresh_servers(cx);
     }
 
-    /// "Stop terminal server N?", over Settings.
+    /// "Stop the terminals kept from an older Wings?", over Settings.
     pub(super) fn stop_server_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (socket, focus) = self.older.stopping.as_ref()?;
         let row = self.older.list.iter().find(|row| &row.socket == socket)?;
-        let title = format!("Stop terminal server {}?", row.version);
+        let title = format!("Stop the {}?", lowercase_first(&older_name(&self.older.list, row)));
         let detail = match (row.running, row.shown) {
             (1, 1) => {
                 "Its terminal ends, and its pane closes. Anything running in it stops.".to_owned()
@@ -543,6 +543,21 @@ fn terminals_line(row: &ServerRow) -> String {
     }
 }
 
+/// What an older server's row calls it: with its number when there are several, so their rows and Stop buttons differ.
+fn older_name(list: &[ServerRow], row: &ServerRow) -> String {
+    if list.iter().filter(|row| !row.current).count() > 1 {
+        format!("Terminals kept from an older Wings (server {})", row.version)
+    } else {
+        "Terminals kept from an older Wings".to_owned()
+    }
+}
+
+/// `text` with its first letter lower case, to go after "Stop the".
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map(|first| first.to_lowercase().chain(chars).collect()).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +646,16 @@ mod tests {
             terminals_line(&row(2, 0)),
             "Runs 2 terminals, none shown in Wings."
         );
+    }
+
+    /// Two older servers' rows, and their Stop buttons, say which is which; one alone needs no number.
+    #[test]
+    fn several_older_servers_are_told_apart_by_number() {
+        let row = |version, current| ServerRow { socket: PathBuf::new(), version, current, running: 1, shown: 0 };
+        let one = [row(11, true), row(9, false)];
+        assert_eq!(older_name(&one, &one[1]), "Terminals kept from an older Wings");
+        let two = [row(11, true), row(9, false), row(10, false)];
+        assert_ne!(older_name(&two, &two[1]), older_name(&two, &two[2]));
+        assert_eq!(lowercase_first(&older_name(&two, &two[2])), "terminals kept from an older Wings (server 10)");
     }
 }

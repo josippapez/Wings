@@ -4,7 +4,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use gpui::{AnyElement, App, Context, Subscription, Task, TextStyle, Window, div, prelude::*, px, relative, rgba};
+use gpui::{AnyElement, App, Context, Subscription, Task, TextStyle, Window, div, prelude::*, px, relative, rgb};
 use wings_agents::semantic::{Progress, Semantic, State, Status};
 use wings_spaces::claude_accounts;
 
@@ -65,7 +65,7 @@ impl Workspace {
         self.redraw_sidebar(cx);
     }
 
-    /// The fill of the sidebar's Settings row while a round worth showing runs, its background filling from the left
+    /// The fill of the sidebar's Settings row while a round worth showing runs, a thin bar along its foot growing
     /// as far as the round is, and what the row's tooltip says. Its layer draws it and moves it on, so the sidebar
     /// draws only when it comes and goes.
     pub(super) fn indexing_fill(&self) -> Option<(AnyElement, impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static)> {
@@ -139,8 +139,8 @@ fn status_line(status: &Status) -> String {
     }
 }
 
-/// The Settings row's indexing fill: its rounded background, as wide as the share of the round done. The layer draws it
-/// over the row, so it is the hover's faint white and the row's text reads through it.
+/// The Settings row's indexing fill: a thin bar along the row's foot, as long as the share of the round done. The
+/// layer draws it over the row.
 struct IndexingFill(Arc<Progress>);
 
 #[cfg(test)]
@@ -160,13 +160,15 @@ impl live::Draw for IndexingFill {
         let share = self.0.shown().unwrap_or(1.0);
         #[cfg(test)]
         DRAWN.with(|drawn| drawn.set((drawn.get().0 + 1, share)));
-        // A clip as wide as the share over the row's whole rounded shape, so the front edge is straight.
+        // A thin bar along the foot of the row, as long as the share done: progress, not a hover.
         div()
-            .h_full()
-            .w(relative(share))
-            .overflow_hidden()
-            .children(crate::ui::cutoff::clips_on_purpose())
-            .child(div().h_full().w(relative(1.0 / share.max(0.001))).rounded(px(theme::RADIUS)).bg(rgba(theme::hover())))
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .px(px(10.0))
+            .pb(px(3.0))
+            .child(div().h(px(2.0)).w(relative(share)).rounded_full().bg(rgb(theme::working())))
             .into_any_element()
     }
 }

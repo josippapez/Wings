@@ -888,8 +888,8 @@ impl Workspace {
                 "New tab button opens",
                 format!(
                     "What the + button does: open a terminal or the Project page, choose each time from the \
-                     menu, or open a plugin page. Plugin pages that declare \"newTab\": true in their view show \
-                     here and in the menu next to the button. {} always opens a terminal.",
+                     menu, or open a plugin page. Plugin pages that can open as a new tab show here and in the \
+                     menu next to the button. {} always opens a terminal.",
                     shortcut_label("T", false)
                 ),
                 new_tab,
@@ -1173,8 +1173,11 @@ impl Workspace {
                     .child(
                         div()
                             .h(px(32.0))
+                            // As wide as the shortcut above it, so the two line up.
+                            .min_w(px(96.0))
                             .flex()
                             .items_center()
+                            .justify_center()
                             .px(px(12.0))
                             .rounded(px(6.0))
                             .border_1()
@@ -1315,6 +1318,7 @@ impl Workspace {
         };
         let summary = match state {
             ConnState::NotInstalled => "Install Claude Code to give it plugin tools.",
+            ConnState::NotChecked => "Check whether it is installed and connected, so its sessions can get Wings' and plugin tools.",
             ConnState::Connected => {
                 "Its sessions get Wings' and plugin tools, and plugins get its usage numbers. Your own status line \
                  still shows."
@@ -1340,6 +1344,14 @@ impl Workspace {
             },
             cx,
         );
+        // Not read yet: Check reads it, which then offers Connect.
+        let buttons = buttons.when(state == ConnState::NotChecked, |row| {
+            row.child(
+                ui::button("claude-check", "Check Claude Code", ui::Variant::Secondary, busy, "Check")
+                    .children(ui::spot(|| "claude-check".into()))
+                    .when(!busy, |b| b.on_click(cx.listener(|this, _, _, cx| this.load_claude_status(cx)))),
+            )
+        });
         // Its buttons' row stays, empty, while it isn't installed.
         let mut main = vec![Self::connection_card(
             "Claude Code",
@@ -1392,7 +1404,7 @@ impl Workspace {
                 "agents-run-commands",
                 "Let Claude run commands in new tabs",
                 "When Claude opens a tab for a command, like a dev server, Wings presses Enter for it. Claude Code still \
-                 asks you before it opens the tab, unless you allowed open_pane without asking. Off: the command waits \
+                 asks you before it opens the tab, unless you allowed the tool it uses to open a tab without asking. Off: the command waits \
                  for you to press Enter.",
                 self.prefs.agents_run_commands,
                 |this, on, cx| this.set_prefs(|prefs| prefs.agents_run_commands = on, cx),
@@ -1413,7 +1425,7 @@ impl Workspace {
                  to its right, or floating over it. Its next ones follow, and the buttons on the split switch that \
                  agent afterwards.",
                 None,
-                self.select(
+                self.select_of_width(
                     "agent-terminals-open",
                     "Agent terminals open",
                     Opens::CHOICES
@@ -1425,6 +1437,7 @@ impl Workspace {
                             (label.into(), opens == self.prefs.agent_terminals_open, choose)
                         })
                         .collect(),
+                    px(224.0),
                     cx,
                 ),
             ),
@@ -1689,7 +1702,7 @@ impl Workspace {
                                 .mt(px(4.0))
                                 .text_size(px(12.0))
                                 .text_color(rgb(theme::muted_foreground()))
-                                .child("These apply to every terminal right away."),
+                                .child("Changes apply right away."),
                         ),
                 )
             })
@@ -1756,7 +1769,8 @@ impl Workspace {
                         .child(sidebar)
                         .child(content)
                         .child(
-                            div().absolute().top(px(8.0)).right(px(8.0)).child(
+                            // Its own ground, so a card scrolled under it doesn't show its border through the X.
+                            div().absolute().top(px(8.0)).right(px(8.0)).rounded(px(8.0)).bg(rgb(theme::palette().dialog)).child(
                                 ui::icon_button(
                                     "close-settings",
                                     Icon::X,
@@ -1774,7 +1788,7 @@ impl Workspace {
     }
 
     /// The desktop sidebar's last row: Settings, with its shortcut, as its `SidebarNavRow`, muted until pointed at.
-    /// While past sessions are indexed, its background fills from the left as far as it is, and its tooltip says.
+    /// While past sessions are indexed, a thin bar along its foot shows how far it is, and its tooltip says.
     pub(super) fn settings_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let look = super::sidebar::Look::Plain;
         let row = match self.indexing_fill() {

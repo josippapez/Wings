@@ -259,7 +259,7 @@ impl ProjectPage {
                 .child(form_field(160.0, false, self.facts.name.clone()))
                 .child(form_field(192.0, true, self.facts.value.clone()))
                 .child(
-                    ui::button("add-fact", "Add fact", Variant::Ghost, false, "Add fact")
+                    ui::button("add-fact", "Add fact", Variant::Outline, false, "Add fact")
                         .h(px(28.0))
                         .text_size(px(12.5))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit_fact(cx))),

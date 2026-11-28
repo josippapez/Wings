@@ -62,7 +62,7 @@ fn header_button(
     ui::button(
         id,
         label.clone(),
-        Variant::Ghost,
+        Variant::Outline,
         works,
         div()
             .flex()
@@ -122,7 +122,7 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
             .starts_with("http://")
     });
     [
-        ("Show these in Wings", list(&shows)),
+        (SHOWS, list(&shows)),
         ("Call these web addresses, with tokens you give it", list(&web)),
         (
             "Call the programs on this computer that listen at these addresses",
@@ -167,6 +167,14 @@ pub(super) fn access_groups(manifest: &Manifest) -> Vec<(&'static str, Vec<Strin
     .into_iter()
     .filter_map(|(title, items)| Some((title, items?)))
     .collect()
+}
+
+/// The group of what a plugin adds to Wings: its items are plain words ("Pane badges"), not commands or addresses.
+const SHOWS: &str = "Show these in Wings";
+
+/// Whether a group's items are plain words, which read as text, not as code.
+fn plain_items(title: &str) -> bool {
+    title == SHOWS
 }
 
 /// How the approval names `paneOutput`. Terminal output is where programs print tokens and passwords, so it says so.
@@ -217,7 +225,7 @@ pub(super) fn access_list(manifest: &Manifest) -> AnyElement {
                                 .py(px(2.0))
                                 .rounded(px(6.0))
                                 .bg(rgba(0xffffff0f))
-                                .font_family("Menlo")
+                                .when(!plain_items(title), |chip| chip.font_family("Menlo"))
                                 .text_size(px(12.0))
                                 .child(item)
                         }),
@@ -1175,6 +1183,12 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_a_plugin_shows_reads_as_words_and_commands_as_code() {
+        assert!(plain_items("Show these in Wings"));
+        assert!(!plain_items("Run these commands as you, with your own sign-ins"));
+    }
 
     #[test]
     fn the_review_lists_what_the_manifest_asks_for_in_the_desktops_words() {

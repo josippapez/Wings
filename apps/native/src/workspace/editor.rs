@@ -157,6 +157,7 @@ impl Workspace {
                                 ui::ButtonSize::Sm,
                             )
                             .map(|button| ui::behaviors::note_press(button, "open-in-editor", menu_open))
+                            .children(ui::spot(|| "open-in-editor".into()))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if merged && more {
                                     this.editor_menu = !ui::behaviors::was_open("open-in-editor", menu_open, cx);
@@ -175,6 +176,7 @@ impl Workspace {
                                     if full { ui::ButtonSize::Xs } else { ui::ButtonSize::Sm },
                                 )
                                 .map(|button| ui::behaviors::note_press(button, "open-in-menu", menu_open))
+                                .children(ui::spot(|| "open-in-menu".into()))
                                 .on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         this.editor_menu = !ui::behaviors::was_open("open-in-menu", menu_open, cx);
