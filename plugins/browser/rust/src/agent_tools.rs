@@ -89,6 +89,8 @@ struct Info {
     loading: bool,
     /// The origin of a window the tab's page opened by itself, which wasn't opened: a click that isn't yours opens none.
     blocked: String,
+    /// What the page waits on the person for (`certificate` or `auth`) and the site, which no tool answers.
+    waiting: Option<(String, String)>,
     /// When this page last had the focus: the page of a project that has it most recently is the one a tool uses.
     focused_at: f64,
     /// The size last set by a tool, since the person can drag a window to another.
@@ -127,6 +129,7 @@ fn hear(page: &Value) {
             title: text(page, "title"),
             loading: page["loading"] == true,
             blocked: text(page, "blockedPopup"),
+            waiting: waiting_of(page),
             focused_at,
             size: old.and_then(|old| old.size),
         });
@@ -207,7 +210,18 @@ fn describe(page: &Info, mine: bool) -> String {
         "" => String::new(),
         origin => format!(". It blocked a pop-up to {origin}: a page opens one only on a real click, which yours in the page aren't, so ask the person to click it (handoff)"),
     };
-    format!("{what} (page {}{place}): {}{title}{}{blocked}", page.id, if page.url.is_empty() { "(no address yet)" } else { &page.url }, if page.loading { " (still loading)" } else { "" })
+    let waiting = match &page.waiting {
+        Some((what, site)) if what == "certificate" => format!(". It waits for the person to choose about {site}'s certificate, which isn't valid: ask them (handoff) and don't try to click through it"),
+        Some((_, site)) => format!(". It waits for the person to sign in to {site} in Wings' sheet: ask them (handoff)"),
+        None => String::new(),
+    };
+    format!("{what} (page {}{place}): {}{title}{}{blocked}{waiting}", page.id, if page.url.is_empty() { "(no address yet)" } else { &page.url }, if page.loading { " (still loading)" } else { "" })
+}
+
+/// What a page's answer says it waits on the person for, and the site.
+fn waiting_of(answer: &Value) -> Option<(String, String)> {
+    let waiting = &answer["waiting"];
+    Some((waiting["for"].as_str()?.to_owned(), text(waiting, "site")))
 }
 
 /// A tab as its page answered about it.
@@ -223,6 +237,7 @@ fn info_of(answer: &Value) -> Info {
         title: text(answer, "title"),
         loading: answer["loading"] == true,
         blocked: text(answer, "blockedPopup"),
+        waiting: waiting_of(answer),
         focused_at: 0.0,
         size: get(&text(answer, "id")).and_then(|page| page.size),
     }
@@ -743,6 +758,12 @@ mod tests {
         assert!(describe(&tab, true).ends_with("It blocked a pop-up to https://login.a.com: a page opens one only on a real click, which yours in the page aren't, so ask the person to click it (handoff)"));
         tab.blocked.clear();
         assert!(!describe(&tab, true).contains("pop-up"));
+        // A page that waits on the person says so, and for what.
+        let cert = info_of(&json!({ "id": "p1", "tab": "t2", "url": "https://a.com/", "waiting": { "for": "certificate", "site": "localhost:8443" } }));
+        assert!(describe(&cert, true).ends_with("It waits for the person to choose about localhost:8443's certificate, which isn't valid: ask them (handoff) and don't try to click through it"));
+        let auth = info_of(&json!({ "id": "p1", "tab": "t2", "url": "https://a.com/", "waiting": { "for": "auth", "site": "intranet:8080" } }));
+        assert!(describe(&auth, true).ends_with("It waits for the person to sign in to intranet:8080 in Wings' sheet: ask them (handoff)"));
+        assert!(!describe(&tab, true).contains("waits"));
     }
 
     #[test]
