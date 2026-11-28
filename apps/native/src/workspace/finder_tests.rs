@@ -999,6 +999,33 @@ fn a_long_session_title_runs_to_the_end_of_its_row_not_to_where_the_hidden_butto
 }
 
 #[test]
+fn a_long_account_name_is_cut_before_the_session_title_is() {
+    let project = folder("long-account");
+    let gone = project.join("g/s");
+    let accounts = folder("long-account-home");
+    let (default, work) = (accounts.join(".claude"), accounts.join(".claude-client-acme-consulting-eu-west-2"));
+    made_up_account(&default, &[(DARK, &gone, "main", "Add dark mode", "Done")]);
+    made_up_account(
+        &work,
+        &[(LOGIN, &gone, "main", "Make the Button component accept an icon and a label together", "I did it")],
+    );
+    let (app, mut window) = open_config(|config| {
+        config.project = project.clone();
+        config.sessions = Some(SessionSource::Folders(vec![default.clone(), work.clone()]));
+    });
+    window.update(|w, window, cx| w.open_history(window, cx));
+    wait_for(&app, &window, |w| w.sheet.as_ref().is_some_and(|s| s.results.is_some()), "no results");
+    app.advance_clock(crate::ui::motion::POPUP_IN * 2);
+    app.run_until_parked();
+    crate::ui::forget_spots();
+    window.draw();
+    let badge = crate::ui::spot_at("history-account-0").expect("the account badge is drawn");
+    let title = crate::ui::spot_at("history-title-0").expect("the title is drawn");
+    assert!(badge.size.width <= gpui::px(120.0), "the badge is {:?} wide", badge.size.width);
+    assert!(title.size.width > gpui::px(250.0), "the title is {:?} wide", title.size.width);
+}
+
+#[test]
 fn the_history_sheet_is_full_height_its_meta_lines_up_with_the_title_and_its_scope_toggle_hugs_its_buttons() {
     let project = folder("layout");
     let claude = made_up_claude(

@@ -1241,7 +1241,12 @@ impl Workspace {
                                     .children(ui::spot(|| format!("history-title-{at}")))
                                     .child(title),
                             )
-                            .children(account.map(super::agent_list::account_badge)),
+                            // Capped, so a long account name is cut before the title is: the sheet is a fixed width.
+                            .children(account.map(|name| {
+                                super::agent_list::account_badge(name)
+                                    .max_w(px(120.0))
+                                    .children(ui::spot(|| format!("history-account-{at}")))
+                            })),
                     )
                     .children(detail.map(|detail| div().pl(AGENT_MARK_INDENT).child(detail)))
                     .child(

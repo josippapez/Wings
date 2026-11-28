@@ -45,7 +45,8 @@ pub fn sheet(
             inset: false,
         }])
         .flex_col()
-        .bg(rgba(theme::palette().popover));
+        // Opaque: the popover colour is 95% opaque, and the terminal's text showed through behind the search and filters.
+        .bg(rgba(theme::palette().popover | 0xff));
     // `dialog`'s backdrop keeps 32 points off the window's top and foot so a panel doesn't reach the composer; a sheet is
     // the height of what it covers.
     (backdrop.py_0().items_stretch().justify_end(), panel)
