@@ -437,7 +437,10 @@ impl Render for TerminalView {
         }
         crate::ui::readout::render("terminal");
         if self.autofocus && self.visible {
-            self.focus.focus(window, cx);
+            // Once the draw is over: views drawn before this one already reported the focused element to the
+            // accessibility tree, which takes one per draw, and a second aborted a debug build.
+            let focus = self.focus.clone();
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
             self.autofocus = false;
         }
         self.update_blink(window, cx);

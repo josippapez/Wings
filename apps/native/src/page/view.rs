@@ -420,10 +420,10 @@ impl Render for PageView {
             if dialog.is_some() {
                 if may_take {
                     self.focus_before = window.focused(cx);
-                    window.focus(&self.dialog_focus, cx);
+                    focus_after_draw(self.dialog_focus.clone(), window, cx);
                 }
             } else if let Some(before) = self.focus_before.take() {
-                window.focus(&before, cx);
+                focus_after_draw(before, window, cx);
             }
         }
         self.dialog_shown = dialog;
@@ -435,10 +435,10 @@ impl Render for PageView {
             if popup.is_some() {
                 if may_take {
                     self.popup_before = window.focused(cx);
-                    window.focus(&self.popup_focus, cx);
+                    focus_after_draw(self.popup_focus.clone(), window, cx);
                 }
             } else if let Some(before) = self.popup_before.take() {
-                window.focus(&before, cx);
+                focus_after_draw(before, window, cx);
             }
         }
         self.popup_shown = popup;
@@ -501,11 +501,12 @@ impl Render for PageView {
                     // edit form, is brought up once it is drawn.
                     reveal = Some(state.field.clone());
                     if state.select_on_focus {
-                        state
-                            .field
-                            .update(cx, |field, cx| field.select_all(window, cx));
+                        let field = state.field.clone();
+                        window.defer(cx, move |window, cx| {
+                            field.update(cx, |field, cx| field.select_all(window, cx))
+                        });
                     } else {
-                        focus.focus(window, cx);
+                        focus_after_draw(focus.clone(), window, cx);
                     }
                 }
                 let id = *id;

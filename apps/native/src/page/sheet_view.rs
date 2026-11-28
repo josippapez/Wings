@@ -8,7 +8,7 @@ use gpui::{
     AnyElement, Context, ElementId, Focusable, MouseButton, SharedString, div, prelude::*,
 };
 
-use super::{Node, PageView, plain_text, tree};
+use super::{Node, PageView, focus_after_draw, plain_text, tree};
 use crate::{
     icons::Icon,
     ui::{self, ButtonSize, behaviors::EscapeExt, motion},
@@ -149,13 +149,13 @@ impl PageView {
             if self.sheet_return.is_none() {
                 self.sheet_return = window.focused(cx);
             }
-            target.focus(window, cx);
+            focus_after_draw(target.clone(), window, cx);
         }
         if drawn.is_empty()
             && !self.sheets_shown.is_empty()
             && let Some(back) = self.sheet_return.take()
         {
-            back.focus(window, cx);
+            focus_after_draw(back, window, cx);
         }
         self.sheets_shown = drawn.into_iter().map(|(id, _)| id).collect();
     }

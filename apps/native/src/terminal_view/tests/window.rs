@@ -459,3 +459,63 @@ fn a_hidden_window_gets_no_new_screens_until_it_shows_again() {
         thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// A new terminal takes the keyboard from what had it between draws, never in the middle of one: the accessibility tree
+/// reports one focused element per draw, and the tab drawn before the terminal and the terminal both asking for it in the
+/// same draw aborted a debug build.
+#[test]
+fn a_new_terminal_takes_the_keyboard_between_draws() {
+    use gpui::{Entity, FocusHandle, InteractiveElement, Role, canvas, div};
+    use std::{cell::RefCell, rc::Rc};
+
+    type Seen = Rc<RefCell<Vec<(Option<FocusHandle>, Option<FocusHandle>)>>>;
+    struct Shell {
+        tab: FocusHandle,
+        terminal: Option<Entity<TerminalView>>,
+        seen: Seen,
+    }
+    impl Render for Shell {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (before, after) = (Rc::new(std::cell::Cell::new(None)), self.seen.clone());
+            let first = before.clone();
+            div()
+                .size_full()
+                .child(canvas(move |_, window, cx| first.set(Some(window.focused(cx))), |_, _, _, _| {}).absolute().size_0())
+                .child(div().id("tab").role(Role::Tab).track_focus(&self.tab).absolute().size_0())
+                // Cached, as the window's panes are: a cached view renders while the window is drawn, after the tab.
+                .children(self.terminal.clone().map(|terminal| terminal.cached(gpui::StyleRefinement::default().size_full())))
+                .child(
+                    canvas(move |_, window, cx| after.borrow_mut().push((before.take().flatten(), window.focused(cx))), |_, _, _, _| {})
+                        .absolute()
+                        .size_0(),
+                )
+        }
+    }
+
+    let mut app = TestApp::new();
+    app.background_executor().allow_parking();
+    let seen = Seen::default();
+    let mut window = app.open_window({
+        let seen = seen.clone();
+        move |_, cx| Shell { tab: cx.focus_handle(), terminal: None, seen }
+    });
+    let tab = window.read(|shell, _| shell.tab.clone());
+    window.update(|_, window, cx| window.focus(&tab, cx));
+    window.draw();
+    window.update(|shell, _, cx| {
+        let mut command = wings_terminal::CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 5"]);
+        let process = Arc::new(PtyProcess::spawn_command(command, wings_terminal::PtySize::default()).unwrap());
+        let (runtime, latest, updates) = start_process(process, "focus-test".into(), Vec::new(), Default::default()).unwrap();
+        shell.terminal = Some(cx.new(|cx| TerminalView::new(runtime, latest, updates, cx)));
+        cx.notify();
+    });
+    for _ in 0..3 {
+        window.draw();
+        app.run_until_parked();
+    }
+    let terminal = window.read(|shell, _| shell.terminal.clone().unwrap());
+    assert!(window.update(|_, window, cx| terminal.read(cx).focus.is_focused(window)), "the new terminal took the keyboard");
+    let split: Vec<_> = seen.borrow().iter().filter(|(first, last)| first != last).cloned().collect();
+    assert!(split.is_empty(), "the keyboard moved in the middle of a draw: {split:?}");
+}

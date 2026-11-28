@@ -4888,3 +4888,98 @@ fn a_toast_floats_over_the_foot_of_a_page_whatever_its_body_has_scrolled_to_and_
 
 #[path = "tab_strip_tests.rs"]
 mod tab_strip;
+
+/// A page's tab, drawn before it, has the keyboard when the page opens a dialog or a field that takes it. The keyboard
+/// moves between draws, never in the middle of one: the accessibility tree reports one focused element per draw, and
+/// the tab and the dialog both asking for it in the same draw aborted a debug build.
+mod focus_between_draws {
+    use gpui::{Entity, FocusHandle, InteractiveElement, StyleRefinement, Role, Window, canvas, div, prelude::*};
+    use std::{cell::RefCell, rc::Rc};
+
+    use super::*;
+
+    /// The keyboard as the window saw it before the page was drawn and after, in each draw.
+    type Seen = Rc<RefCell<Vec<(Option<FocusHandle>, Option<FocusHandle>)>>>;
+
+    struct Shell {
+        tab: FocusHandle,
+        page: Entity<PageView>,
+        seen: Seen,
+    }
+
+    impl Render for Shell {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let (before, after) = (Rc::new(std::cell::Cell::new(None)), self.seen.clone());
+            let first = before.clone();
+            div()
+                .size_full()
+                .child(
+                    canvas(
+                        move |_, window, cx| first.set(Some(window.focused(cx))),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_0(),
+                )
+                .child(div().id("tab").role(Role::Tab).track_focus(&self.tab).absolute().size_0())
+                .child(self.page.clone().cached(StyleRefinement::default().size_full()))
+                .child(
+                    canvas(
+                        move |_, window, cx| {
+                            let first = before.take().flatten();
+                            after.borrow_mut().push((first, window.focused(cx)));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_0(),
+                )
+        }
+    }
+
+    #[test]
+    fn a_dialog_with_a_field_takes_the_keyboard_from_the_pages_tab_between_draws() {
+        let mut app = TestApp::new();
+        app.background_executor().allow_parking();
+        let host = hosted(&mut app);
+        let source = dialog_by_itself();
+        let seen = Seen::default();
+        let mut window = app.open_window({
+            let seen = seen.clone();
+            move |_, cx| {
+                let tab = cx.focus_handle();
+                let page = cx.new(|cx| {
+                    let mut page = PageView::in_plugin(&host, &source, cx);
+                    page.set_host_focus(tab.clone());
+                    page
+                });
+                Shell { tab, page, seen }
+            }
+        });
+        settle_shell(&app, &mut window, "Waiting.");
+        let tab = window.read(|shell, _| shell.tab.clone());
+        window.update(|_, window, cx| window.focus(&tab, cx));
+        window.draw();
+        settle_shell(&app, &mut window, "Inside the dialog");
+        window.draw();
+        app.run_until_parked();
+        window.draw();
+
+        assert!(!window.update(|_, window, _| tab.is_focused(window)), "the dialog took the keyboard");
+        let split: Vec<_> = seen.borrow().iter().filter(|(first, last)| first != last).cloned().collect();
+        assert!(split.is_empty(), "the keyboard moved in the middle of a draw: {split:?}");
+    }
+
+    fn settle_shell(app: &TestApp, window: &mut TestAppWindow<Shell>, shown: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            app.run_until_parked();
+            window.draw();
+            if window.read(|shell, cx| shell.page.read(cx).text().contains(shown)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the page never showed {shown:?}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+}

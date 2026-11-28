@@ -1,6 +1,13 @@
 //! The page view's free helpers: finding nodes in a tree, text measuring, tones and sizes.
 use super::*;
 
+/// Moves the keyboard to `handle` once the draw is over. A page renders while the window is drawn, after the views
+/// drawn before it have reported the focused element to the accessibility tree, which takes one per draw: moving the
+/// keyboard in the render reported two and aborted a debug build.
+pub(in crate::page) fn focus_after_draw(handle: gpui::FocusHandle, window: &mut gpui::Window, cx: &mut gpui::App) {
+    window.defer(cx, move |window, cx| window.focus(&handle, cx));
+}
+
 /// Whether the page shows a sheet, wherever in its tree.
 pub(super) fn sheet_in(nodes: &[Node]) -> bool {
     nodes
