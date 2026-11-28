@@ -931,9 +931,12 @@ impl TextField {
     fn lay_out(&self, style: &TextStyle, bounds: Bounds<Pixels>, window: &Window) -> (Layout, Point<Pixels>) {
         let one_line = self.rows.is_none();
         let wrap = (!one_line).then_some(bounds.size.width);
-        let mut layout = self.shape(style, wrap, self.focus.is_focused(window), window);
+        let focused = self.focus.is_focused(window);
+        let mut layout = self.shape(style, wrap, focused, window);
         let mut scroll = px(0.0);
-        if one_line {
+        // A field without the keyboard shows the start of its text, as a Mac's does once editing ends: a value set from
+        // outside puts the caret at its end, which showed a long address cut at its left.
+        if one_line && focused {
             let caret = layout.point(self.caret()).x;
             let furthest = (layout.width() + px(1.0) - bounds.size.width).max(px(0.0));
             scroll = self

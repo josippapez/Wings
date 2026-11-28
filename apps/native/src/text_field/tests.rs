@@ -313,6 +313,22 @@ fn a_time_set_from_outside_takes_digits_typed_over_its_hours() {
     assert_eq!(text(&window, &field), "10:45");
 }
 
+/// A long text set from outside puts the caret at its end: the field with the keyboard scrolls to show it, and one
+/// without shows the text's start.
+#[test]
+fn a_long_text_shows_its_start_without_the_keyboard_and_its_caret_with_it() {
+    let (_app, mut window, field) = open("");
+    let long = "https://github.com/acme/web/pull/482/files?diff=split&w=1#diff-0123456789abcdef";
+    let scroll = |window: &mut TestAppWindow<Host>| {
+        window.draw();
+        window.read(|_, cx| field.read(cx).scroll)
+    };
+    window.update(|_, _, cx| field.update(cx, |field, _| field.set_text(long.into())));
+    assert!(scroll(&mut window) > px(0.0), "with the keyboard the caret at the end is in view");
+    window.update(|_, window, cx| window.blur(cx));
+    assert_eq!(scroll(&mut window), px(0.0));
+}
+
 /// A piece of the window that keeps its last drawing, as the workspace's are (`workspace::parts`), holding a field,
 /// and counting its renders. `covered`: it draws something of its own over the field, as a page's dialog. `fading`:
 /// the field is in a box fading in that never ends.
