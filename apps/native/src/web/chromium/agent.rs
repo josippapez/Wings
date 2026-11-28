@@ -13,7 +13,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     rc::Rc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use base64::Engine;
@@ -56,7 +56,49 @@ pub struct Agent {
     logs: RefCell<VecDeque<Value>>,
     /// The page's recording, running or ended and not yet asked about (`record`).
     recording: RefCell<Option<Recording>>,
+    /// Its frames waiting for a check of the page that began after them (`Held`).
+    held: RefCell<Held>,
 }
+
+/// A recording's frames, held until a check of the page that began after each found no password or card field: only then
+/// is a frame written, so a page that showed one is never in the video. Frames were written until a check ran, and none ran
+/// in a page the recording went on to, which recorded a sign-in page's card field.
+#[derive(Default)]
+struct Held {
+    /// When each came, its time in the video, and its picture, the oldest first.
+    frames: VecDeque<(Instant, f64, Vec<u8>)>,
+    checking: bool,
+    last_check: Option<Instant>,
+}
+
+impl Held {
+    /// Holds a frame that came `at`, the oldest going past `HELD_MOST`.
+    fn hold(&mut self, at: Instant, at_ms: f64, jpeg: Vec<u8>) {
+        self.frames.push_back((at, at_ms, jpeg));
+        while self.frames.len() > HELD_MOST {
+            self.frames.pop_front();
+        }
+    }
+
+    /// The frames that came before a check that began `began` and found no secret field, to write; later ones wait.
+    fn cleared_by(&mut self, began: Instant) -> Vec<(f64, Vec<u8>)> {
+        let mut cleared = Vec::new();
+        while let Some((_, at_ms, jpeg)) = self.frames.pop_front_if(|(came, _, _)| *came <= began) {
+            cleared.push((at_ms, jpeg));
+        }
+        cleared
+    }
+
+    /// Drops the frames that came before a check that began `began` and couldn't clear them (the page moved).
+    fn drop_before(&mut self, began: Instant) {
+        self.frames.retain(|(came, _, _)| *came > began);
+    }
+}
+
+/// How often a recording's page is checked for a password or card field, at most.
+const HELD_CHECK_EVERY: Duration = Duration::from_millis(200);
+/// The most frames held for a check: older ones go, unwritten.
+const HELD_MOST: usize = 120;
 
 impl Agent {
     /// The page closed: a recording of it ends, and its file is kept.
@@ -732,6 +774,8 @@ pub fn record(page: &Shared, record: &WebRecord, token: u64) {
         WebRecord::Status => tell(Ok(page.agent.recording.borrow().as_ref().map_or_else(|| json!({ "recording": false, "durationMs": 0, "frames": 0 }), Recording::status))),
         WebRecord::Stop => match page.agent.recording.take() {
             Some(recording) => {
+                // What no check has cleared yet, the last moments, isn't written.
+                page.agent.held.take();
                 stop_screencast(page);
                 recording.stop(Box::new(tell));
             }
@@ -739,6 +783,7 @@ pub fn record(page: &Shared, record: &WebRecord, token: u64) {
         },
         WebRecord::Cancel => match page.agent.recording.take() {
             Some(recording) => {
+                page.agent.held.take();
                 stop_screencast(page);
                 recording.cancel();
                 tell(Ok(json!({ "cancelled": true })));
@@ -773,6 +818,7 @@ pub fn record(page: &Shared, record: &WebRecord, token: u64) {
                 if page.agent.recording.borrow().as_ref().is_some_and(|recording| !recording.ended()) {
                     return tell(Err("The page is being recorded already: stop or cancel that first".into()));
                 }
+                page.agent.held.take();
                 page.agent.recording.replace(Some(Recording::start(page.web_dir.clone(), path.clone(), fps, max_ms)));
                 let (weak, again) = (weak_of(&page), asked.clone());
                 // At the page's size in CSS pixels, as the browse MCP records an .mp4: frames at the screen's own pixels
@@ -818,12 +864,63 @@ fn screencast_frame(page: &Shared, session: Option<&str>, params: &Value) {
             recording.end(RECORDING_SECRET);
         } else if let Some(jpeg) = params["data"].as_str().and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok()) {
             let at_ms = params["metadata"]["timestamp"].as_f64().map_or_else(|| recording.now_ms(), |seconds| seconds * 1000.0);
-            recording.frame(jpeg, at_ms);
+            drop(recording);
+            page.agent.held.borrow_mut().hold(Instant::now(), at_ms, jpeg);
+            check_held(page);
             return;
         }
     }
     drop(recording);
+    page.agent.held.take();
     stop_screencast(page);
+}
+
+/// Checks the page for a password or card field, at most every `HELD_CHECK_EVERY`, and writes the frames that came before
+/// the check began once it finds none; one found ends the recording with none of them. A check that can't answer (the page
+/// is loading) writes nothing, and the next frame asks again.
+fn check_held(page: &Shared) {
+    let now = Instant::now();
+    {
+        let mut held = page.agent.held.borrow_mut();
+        if held.checking || held.last_check.is_some_and(|last| now.duration_since(last) < HELD_CHECK_EVERY) {
+            return;
+        }
+        held.checking = true;
+        held.last_check = Some(now);
+    }
+    let (generation, doc) = (page.generation.get(), page.agent.contexts.borrow().doc());
+    let wings = page.agent.contexts.borrow().of_main(Some(WORLD)).map(|context| context.unique.clone());
+    let (Some(channel), Some(wings)) = (page.agent.channel(), wings) else {
+        page.agent.held.borrow_mut().checking = false;
+        return;
+    };
+    let weak = weak_of(page);
+    channel.ask(None, "Runtime.evaluate", evaluate(&check(), &wings), move |found| {
+        let Some(page) = weak.upgrade() else { return };
+        page.agent.held.borrow_mut().checking = false;
+        let found = value_of(found);
+        if found.as_ref().is_ok_and(|found| found["secret"] == true) {
+            page.agent.seen.note(doc, false);
+            page.agent.held.take();
+            if let Some(recording) = page.agent.recording.borrow().as_ref() {
+                recording.end(RECORDING_SECRET);
+            }
+            return stop_screencast(&page);
+        }
+        // The page moved while it was checked: what came before is of a page no check cleared.
+        if moved(&page, generation, doc) {
+            return page.agent.held.borrow_mut().drop_before(now);
+        }
+        if guard::may_run(&found, now.elapsed(), page.agent.seen.secret(doc)).is_err() {
+            return;
+        }
+        let cleared = page.agent.held.borrow_mut().cleared_by(now);
+        if let Some(recording) = page.agent.recording.borrow().as_ref().filter(|recording| !recording.ended()) {
+            for (at_ms, jpeg) in cleared {
+                recording.frame(jpeg, at_ms);
+            }
+        }
+    });
 }
 
 const RECORDING_IMPORTED: &str = "the page is signed in with cookies you imported";
@@ -1017,4 +1114,26 @@ mod tests {
         assert_eq!(watched("text", ""), json!([]));
         assert_eq!(watched("text", "field.type = 'password'; observed[0]([{ type: 'attributes', target: field, addedNodes: [] }]);"), json!(["1"]));
     }
+
+    /// A recording's frame is written only once a check of the page that began after it cleared it: frames that came later
+    /// wait for the next check, and a page that moved under a check drops what came before it.
+    #[test]
+    fn a_recordings_frames_wait_for_a_check_that_began_after_them() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let mut held = Held::default();
+        held.hold(at(0), 0.0, vec![1]);
+        held.hold(at(10), 10.0, vec![2]);
+        held.hold(at(30), 30.0, vec![3]);
+        assert_eq!(held.cleared_by(at(20)), [(0.0, vec![1]), (10.0, vec![2])]);
+        assert_eq!(held.cleared_by(at(20)), [], "nothing twice");
+        held.hold(at(40), 40.0, vec![4]);
+        held.drop_before(at(35));
+        assert_eq!(held.cleared_by(at(50)), [(40.0, vec![4])], "the frame of a page no check cleared is gone");
+        for ms in 0..(HELD_MOST as u64 + 5) {
+            held.hold(at(100 + ms), ms as f64, vec![]);
+        }
+        assert_eq!(held.frames.len(), HELD_MOST);
+    }
+
 }
