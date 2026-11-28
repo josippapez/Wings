@@ -242,8 +242,9 @@ pub fn own_commands(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
     .into_iter()
     .filter(move |(name, ..)| listed.iter().all(|command| command.name != *name))
     .map(|(name, description, hint)| Command { name: name.to_owned(), description: description.to_owned(), hint: hint.to_owned(), plugin: false, builtin: false })
-    // The views the chat opens itself, from the table in `builtin.rs`.
+    // The views the chat opens itself, from the table in `builtin.rs` and the screens in `screens.rs`.
     .chain(crate::builtin::menu(listed))
+    .chain(crate::builtin::screen_menu(listed))
 }
 
 #[cfg(test)]
@@ -390,8 +391,8 @@ mod tests {
     fn the_slash_menu_offers_these_commands_unless_claude_code_lists_them() {
         let listed = |names: &[&str]| names.iter().map(|name| Command { name: (*name).into(), description: String::new(), hint: String::new(), plugin: false, builtin: false }).collect::<Vec<_>>();
         let own: Vec<String> = own_commands(&listed(&["clear"])).map(|command| command.name).collect();
-        assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions", "skills"]);
-        let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage"])).map(|command| command.name).collect();
-        assert_eq!(own, ["export", "btw", "remote-control", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions", "skills"]);
+        assert_eq!(own, ["status", "export", "btw", "plan", "remote-control", "plugins", "mcp", "usage", "cost", "context", "hooks", "memory", "permissions", "skills", "model", "effort", "rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
+        let own: Vec<String> = own_commands(&listed(&["plan", "status", "usage", "model"])).map(|command| command.name).collect();
+        assert_eq!(own, ["export", "btw", "remote-control", "plugins", "mcp", "cost", "context", "hooks", "memory", "permissions", "skills", "effort", "rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
     }
 }

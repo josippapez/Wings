@@ -204,4 +204,17 @@ mod tests {
         }
         assert_eq!(find("/model", &listed(&[("model", false)])), None, "a plugin's or skill's /model wins");
     }
+
+    /// The slash menu offers each of them while you type, once: the ones Claude Code lists (`/model`, `/effort`) as it
+    /// lists them, the rest from here.
+    #[test]
+    fn the_slash_menu_offers_every_screen_command_once() {
+        let claude_codes = listed(&[("model", true), ("effort", true)]);
+        let ours: Vec<String> = crate::builtin::screen_menu(&claude_codes).map(|command| command.name).collect();
+        assert_eq!(ours, ["rewind", "resume", "fork", "tasks", "workflows", "copy", "bookmarks"]);
+        for typed in ["rew", "res", "fo", "tas", "work", "cop", "book"] {
+            let names: Vec<String> = crate::commands::menu(&claude_codes, typed).into_iter().map(|command| command.name).collect();
+            assert!(names.iter().any(|name| name.starts_with(typed)), "/{typed} offers nothing: {names:?}");
+        }
+    }
 }

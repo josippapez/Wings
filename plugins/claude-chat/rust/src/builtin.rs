@@ -54,6 +54,25 @@ pub fn menu(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
         .map(|(name, description, _)| Command { name: (*name).to_owned(), description: (*description).to_owned(), hint: String::new(), plugin: false, builtin: false })
 }
 
+/// The commands that open the chat's own screens (`screens.rs`), for the slash menu, as the menu shows the ones Claude Code lists: the chat answers them itself, and Claude
+/// Code lists only `/model` and `/effort` of them, so the rest weren't offered while typing.
+pub fn screen_menu(listed: &[Command]) -> impl Iterator<Item = Command> + '_ {
+    [
+        ("model", "Choose the model and how hard it thinks", ""),
+        ("effort", "Choose how hard Claude thinks", ""),
+        ("rewind", "Go back to your latest message, files and all", ""),
+        ("resume", "Open a past session", ""),
+        ("fork", "Branch this conversation into a new chat", ""),
+        ("tasks", "Show the background tasks", ""),
+        ("workflows", "Show the workflows this chat ran", ""),
+        ("copy", "Copy Claude's latest reply, or the Nth back", "[N]"),
+        ("bookmarks", "Show your bookmarked messages", ""),
+    ]
+    .into_iter()
+    .filter(move |(name, ..)| listed.iter().all(|command| command.name != *name))
+    .map(|(name, description, hint)| Command { name: name.to_owned(), description: description.to_owned(), hint: hint.to_owned(), plugin: false, builtin: false })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
