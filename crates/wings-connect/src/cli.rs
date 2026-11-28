@@ -283,14 +283,14 @@ pub fn performance(args: &[String]) -> i32 {
 
 /// Calls the tool `name` with `key=value` arguments and prints its answer. Exits 1 when the tool says it failed.
 fn call_tool(name: &str, rest: &[String]) -> i32 {
-    let mut arguments = serde_json::Map::new();
-    for arg in rest {
-        let Some((key, value)) = arg.split_once('=') else {
-            return fail(&format!("{arg} isn't key=value"));
-        };
-        // A project like `2024` is a name, not a number.
-        arguments.insert(key.to_string(), if key == "project" { json!(value) } else { argument(value) });
-    }
+    let schema = ask("list", json!({}))
+        .ok()
+        .and_then(|reply| reply["tools"].as_array()?.iter().find(|t| t["name"] == json!(name)).map(|t| t["inputSchema"].clone()))
+        .unwrap_or_default();
+    let arguments = match arguments_of(rest, &schema) {
+        Ok(arguments) => arguments,
+        Err(e) => return fail(&e),
+    };
     let request = tool_request(name, arguments, std::env::var("OPENCODE_SESSION_ID").ok());
     match ask("call", request) {
         Ok(result) => {
@@ -303,6 +303,20 @@ fn call_tool(name: &str, rest: &[String]) -> i32 {
         }
         Err(e) => fail(&e),
     }
+}
+
+/// The `key=value` arguments as a tool's input: a key `schema` types as text stays text (a request id like `44913.7`
+/// isn't a number), as does a project like `2024`; any other reads as JSON when it is one (`argument`).
+fn arguments_of(rest: &[String], schema: &Value) -> Result<serde_json::Map<String, Value>, String> {
+    let mut arguments = serde_json::Map::new();
+    for arg in rest {
+        let Some((key, value)) = arg.split_once('=') else {
+            return Err(format!("{arg} isn't key=value"));
+        };
+        let text = key == "project" || schema["properties"][key]["type"] == "string";
+        arguments.insert(key.to_string(), if text { json!(value) } else { argument(value) });
+    }
+    Ok(arguments)
 }
 
 fn tool_request(name: &str, arguments: serde_json::Map<String, Value>, session_id: Option<String>) -> Value {
@@ -614,6 +628,15 @@ mod tests {
         assert_eq!(argument("todo"), json!("todo"));
         assert_eq!(argument("\"quoted\""), json!("\"quoted\""), "a JSON string stays the text as typed");
         assert_eq!(argument(""), json!(""));
+    }
+
+    #[test]
+    fn an_argument_the_tool_types_as_text_stays_text() {
+        let schema = json!({ "properties": { "detail": { "type": "string" }, "limit": { "type": "integer" }, "files": { "anyOf": [] } } });
+        let args = ["detail=44913.7", "limit=5", "files=[\"a\"]", "project=2024", "other=7"].map(String::from);
+        let arguments = super::arguments_of(&args, &schema).unwrap();
+        assert_eq!(serde_json::Value::Object(arguments), json!({ "detail": "44913.7", "limit": 5, "files": ["a"], "project": "2024", "other": 7 }));
+        assert_eq!(super::arguments_of(&["nokey".into()], &schema), Err("nokey isn't key=value".into()));
     }
 
     use serde_json::json;
